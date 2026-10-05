@@ -19,7 +19,14 @@ import {
   fetchClasses,
   saveClasses,
   fetchClassGroups,
-  saveClassGroups
+  saveClassGroups,
+  fetchSchoolLogo,
+  saveSchoolLogo,
+  fetchTeachersAsync,
+  fetchClassGroupsAsync,
+  fetchPurposesAsync,
+  savePurposes,
+  syncAllLocalSettingsToServer
 } from './services/storageService';
 import { 
   formatTelegramBookingMessage, 
@@ -27,7 +34,7 @@ import {
   DEFAULT_TELEGRAM_CONFIG
 } from './services/telegramService';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
-import { formatTime12h } from './data/timeSlots';
+import { formatTime12h, DEFAULT_PURPOSES } from './data/timeSlots';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<'dashboard' | 'calendar' | 'admin'>('dashboard');
@@ -49,6 +56,7 @@ export default function App() {
   const [teachersList, setTeachersList] = useState<string[]>([]);
   const [classesList, setClassesList] = useState<string[]>([]);
   const [classGroups, setClassGroups] = useState<ClassGroup[]>([]);
+  const [purposesList, setPurposesList] = useState<string[]>(DEFAULT_PURPOSES);
 
   // Modals state
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
@@ -71,18 +79,29 @@ export default function App() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [loadedBookings, loadedLogs, loadedTelegram] = await Promise.all([
+        // Sync any local settings to server file storage first
+        await syncAllLocalSettingsToServer();
+
+        const [loadedBookings, loadedLogs, loadedTelegram, loadedLogo, loadedTeachers, loadedGroups, loadedPurposes] = await Promise.all([
           fetchBookings(),
           fetchLogs(),
           fetchTelegramConfig(),
+          fetchSchoolLogo(),
+          fetchTeachersAsync(),
+          fetchClassGroupsAsync(),
+          fetchPurposesAsync(),
         ]);
         setBookings(loadedBookings);
         setLogs(loadedLogs);
         setTelegramConfig(loadedTelegram);
-        setTeachersList(fetchTeachers());
-        
-        const loadedGroups = fetchClassGroups();
+        if (loadedLogo !== undefined) {
+          setSchoolLogo(loadedLogo);
+        }
+        setTeachersList(loadedTeachers);
         setClassGroups(loadedGroups);
+        if (Array.isArray(loadedPurposes) && loadedPurposes.length > 0) {
+          setPurposesList(loadedPurposes);
+        }
         const flatClasses = loadedGroups.flatMap(g => g.subclasses);
         setClassesList(flatClasses.length > 0 ? flatClasses : fetchClasses());
       } catch (err) {
@@ -92,17 +111,65 @@ export default function App() {
     loadData();
   }, []);
 
+  // Multi-device synchronization: sync logo, bookings, teachers, class groups, and purposes
+  useEffect(() => {
+    const syncFromServer = async () => {
+      try {
+        const [syncedLogo, syncedBookings, syncedTeachers, syncedGroups, syncedTelegram, syncedPurposes] = await Promise.all([
+          fetchSchoolLogo(),
+          fetchBookings(),
+          fetchTeachersAsync(),
+          fetchClassGroupsAsync(),
+          fetchTelegramConfig(),
+          fetchPurposesAsync(),
+        ]);
+        setSchoolLogo(prev => prev !== syncedLogo ? syncedLogo : prev);
+        setBookings(prev => JSON.stringify(prev) !== JSON.stringify(syncedBookings) ? syncedBookings : prev);
+        setTelegramConfig(prev => JSON.stringify(prev) !== JSON.stringify(syncedTelegram) ? syncedTelegram : prev);
+        if (Array.isArray(syncedTeachers)) {
+          setTeachersList(prev => JSON.stringify(prev) !== JSON.stringify(syncedTeachers) ? syncedTeachers : prev);
+        }
+        if (Array.isArray(syncedGroups)) {
+          setClassGroups(prev => JSON.stringify(prev) !== JSON.stringify(syncedGroups) ? syncedGroups : prev);
+          const flat = syncedGroups.flatMap(g => g.subclasses);
+          setClassesList(prev => JSON.stringify(prev) !== JSON.stringify(flat) ? flat : prev);
+        }
+        if (Array.isArray(syncedPurposes) && syncedPurposes.length > 0) {
+          setPurposesList(prev => JSON.stringify(prev) !== JSON.stringify(syncedPurposes) ? syncedPurposes : prev);
+        }
+      } catch (e) {}
+    };
+
+    // Sync whenever user switches back to this tab (e.g. on mobile after upload on Mac)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncFromServer();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', syncFromServer);
+
+    // Background interval sync every 10 seconds
+    const intervalId = setInterval(syncFromServer, 10000);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', syncFromServer);
+      clearInterval(intervalId);
+    };
+  }, []);
+
   const todayStr = new Date().toISOString().split('T')[0];
   const todayCount = bookings.filter(b => b.date === todayStr && b.status !== 'cancelled').length;
 
-  // Save Logo
-  const handleSaveSchoolLogo = (logoDataUrl: string | null) => {
+  // Save Logo (Synced to backend server across all devices)
+  const handleSaveSchoolLogo = async (logoDataUrl: string | null) => {
     setSchoolLogo(logoDataUrl);
+    await saveSchoolLogo(logoDataUrl);
     if (logoDataUrl) {
-      localStorage.setItem('sakura_school_logo', logoDataUrl);
-      showToast('School logo updated!', 'success');
+      showToast('School logo updated across all devices!', 'success');
     } else {
-      localStorage.removeItem('sakura_school_logo');
       showToast('Custom logo removed. SAKURA emblem restored.', 'info');
     }
   };
@@ -129,6 +196,13 @@ export default function App() {
     showToast('Class groups updated successfully!', 'success');
   };
 
+  // Save Purposes
+  const handleSavePurposesList = async (purposes: string[]) => {
+    setPurposesList(purposes);
+    await savePurposes(purposes);
+    showToast('Activity purposes updated!', 'success');
+  };
+
   // Admin Auth
   const handleAdminAuthenticate = (success: boolean) => {
     setIsAdminAuthenticated(success);
@@ -151,7 +225,14 @@ export default function App() {
 
   // Quick book from Google Calendar timetable
   const handleQuickBookSlot = (date: string, startTime: string) => {
-    handleOpenBookingModal(false, date, startTime);
+    handleOpenBookingModal(date > todayStr, date, startTime);
+  };
+
+  const handleCloseBookingModal = () => {
+    setIsBookingModalOpen(false);
+    setQuickBookDate(undefined);
+    setQuickBookStartTime(undefined);
+    setBookingModalIsPrebooking(false);
   };
 
   // Create Booking (Single or Recurring Series)
@@ -372,6 +453,7 @@ export default function App() {
         {currentTab === 'calendar' && (
           <BookingCalendar
             bookings={bookings}
+            schoolLogo={schoolLogo}
             onSelectBooking={(b) => {
               setSelectedBooking(b);
               setIsDetailModalOpen(true);
@@ -396,6 +478,8 @@ export default function App() {
             onSaveClassesList={handleSaveClassesList}
             classGroups={classGroups}
             onSaveClassGroups={handleSaveClassGroups}
+            purposesList={purposesList}
+            onSavePurposesList={handleSavePurposesList}
             bookings={bookings}
             logs={logs}
             onCancelBooking={handleCancelBooking}
@@ -406,15 +490,17 @@ export default function App() {
       {/* Booking Modal */}
       <BookingModal
         isOpen={isBookingModalOpen}
-        onClose={() => setIsBookingModalOpen(false)}
+        onClose={handleCloseBookingModal}
         onSubmit={handleCreateBooking}
         existingBookings={bookings}
         teachersList={teachersList}
         classesList={classesList}
         classGroups={classGroups}
+        purposesList={purposesList}
         initialDate={quickBookDate}
         initialStartTime={quickBookStartTime}
         initialIsPrebooking={bookingModalIsPrebooking}
+        onModeChange={(prebooking) => setBookingModalIsPrebooking(prebooking)}
         telegramConfig={telegramConfig}
       />
 

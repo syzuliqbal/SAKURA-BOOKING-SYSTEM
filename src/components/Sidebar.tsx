@@ -10,7 +10,9 @@ import {
   Menu,
   X,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Clock,
+  BookmarkPlus
 } from 'lucide-react';
 import { TelegramConfig } from '../types';
 
@@ -46,6 +48,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const handleOpenBooking = () => {
     onOpenBookingModal(false);
+    setIsMobileOpen(false);
+  };
+
+  const handleOpenPrebooking = () => {
+    onOpenBookingModal(true);
     setIsMobileOpen(false);
   };
 
@@ -100,17 +107,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* Quick Booking Button */}
-        <div className="p-3">
+        {/* Quick Booking Buttons */}
+        <div className="p-3 space-y-1.5">
           <button
             onClick={handleOpenBooking}
             className={`w-full py-2.5 px-3 rounded-xl bg-rose-400/90 hover:bg-rose-400 text-rose-950 font-semibold text-xs transition-all shadow-xs flex items-center justify-center gap-1.5 ${
               isCollapsed ? 'px-0' : ''
             }`}
-            title="Book English Lab"
+            title="Book English Lab (Today)"
           >
-            <Plus className="w-4 h-4 shrink-0" />
-            {!isCollapsed && <span>Book English Lab</span>}
+            <Clock className="w-4 h-4 shrink-0" />
+            {!isCollapsed && <span>Book Lab (Today)</span>}
+          </button>
+
+          <button
+            onClick={handleOpenPrebooking}
+            className={`w-full py-2 px-3 rounded-xl bg-amber-400/20 hover:bg-amber-400/30 text-amber-200 border border-amber-400/30 font-semibold text-xs transition-all flex items-center justify-center gap-1.5 ${
+              isCollapsed ? 'px-0' : ''
+            }`}
+            title="Advance Pre-Booking (Future Dates)"
+          >
+            <BookmarkPlus className="w-4 h-4 shrink-0 text-amber-300" />
+            {!isCollapsed && <span>Advance Pre-Booking</span>}
           </button>
         </div>
 

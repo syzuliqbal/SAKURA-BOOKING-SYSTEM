@@ -18,6 +18,51 @@ export const DEFAULT_TELEGRAM_CONFIG: TelegramConfig = {
   enabled: true,
 };
 
+/**
+ * Extracts integer Thread/Topic ID from string, number, or Telegram URL.
+ * Handles cases like:
+ * - 42
+ * - "#42"
+ * - "Topic 42"
+ * - "https://t.me/c/2147483648/42"
+ * - "https://t.me/c/2147483648/42/105"
+ */
+export function parseTelegramThreadId(raw: string | number | undefined | null): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const s = String(raw).trim();
+  if (!s) return undefined;
+
+  // If user pasted a Telegram URL
+  const linkMatch = s.match(/t\.me\/c\/(\d+)\/(\d+)/i);
+  if (linkMatch) {
+    return parseInt(linkMatch[2], 10);
+  }
+
+  // Remove leading '#' or 'topic' or 'thread'
+  const cleaned = s.replace(/^[#\s]*(?:topic|thread)?\s*/i, '').trim();
+  const num = parseInt(cleaned, 10);
+  return isNaN(num) ? undefined : num;
+}
+
+/**
+ * Parses full Telegram topic link to extract both Chat ID and Topic ID:
+ * e.g. "https://t.me/c/2147483648/42" -> { chatId: "-1002147483648", threadId: "42" }
+ */
+export function extractTelegramLinkDetails(raw: string): { chatId?: string; threadId?: string } | null {
+  if (!raw) return null;
+  const match = raw.match(/t\.me\/c\/(\d+)\/(\d+)/i);
+  if (match) {
+    const rawChat = match[1];
+    const thread = match[2];
+    const fullChatId = rawChat.startsWith('-100') ? rawChat : `-100${rawChat}`;
+    return {
+      chatId: fullChatId,
+      threadId: thread,
+    };
+  }
+  return null;
+}
+
 export function formatTelegramBookingMessage(
   booking: Booking,
   eventType: 'new_booking' | 'prebooking' | 'cancellation'
@@ -26,35 +71,43 @@ export function formatTelegramBookingMessage(
 
   if (eventType === 'cancellation') {
     return `❌ <b>ENGLISH LAB BOOKING CANCELLED</b>
-━━━━━━━━━━━━━━━━━━
-🏫 <b>${SCHOOL_NAME}</b>
-📍 <b>${LAB_NAME}</b>
+━━━━━━━━━━━━━━━
+🏫 <b>SAKURA Lab Booking System</b>
+📍 <b>English Language Lab</b>
 
 📅 <b>Date:</b> ${booking.date}
 ⏰ <b>Time:</b> ${timeFormatted}
 👤 <b>Teacher:</b> ${booking.teacherName}
 🎓 <b>Class:</b> ${booking.className}
-🎯 <b>Lesson:</b> ${booking.title}
+🎯 <b>Purpose:</b> ${booking.title}
+${booking.notes ? `\n💬 <b>Remarks:</b> ${booking.notes}\n` : ''}
 
-<i>This slot is now available on the calendar for other teachers to book.</i>`;
+<i>Slot is now available on the calendar for other teachers to book.</i>`;
   }
 
   const isPrebooking = booking.isPrebooking;
   const isRecurring = booking.isRecurring && booking.recurringUntil;
 
-  return `🔔 <b>${isRecurring ? 'NEW RECURRING PRE-BOOKING' : isPrebooking ? 'NEW ADVANCE PRE-BOOKING' : 'NEW ENGLISH LAB BOOKING'}</b>
-━━━━━━━━━━━━━━━━━━
-🏫 <b>${SCHOOL_NAME}</b>
-📍 <b>${LAB_NAME}</b>
+  let headerTitle = 'NEW ENGLISH LAB BOOKING';
+  if (isRecurring) {
+    headerTitle = 'NEW RECURRING PRE-BOOKING';
+  } else if (isPrebooking) {
+    headerTitle = 'NEW ADVANCE PRE-BOOKING';
+  }
 
-📅 <b>Date:</b> ${booking.date}${isRecurring ? ` <i>(Repeats weekly until ${booking.recurringUntil})</i>` : ''}
+  return `🔔 <b>${headerTitle}</b>
+━━━━━━━━━━━━━━━
+🏫 <b>SAKURA Lab Booking System</b>
+📍 <b>English Language Lab</b>
+
+📅 <b>Date:</b> ${booking.date}${isRecurring ? ` <i>(Weekly until ${booking.recurringUntil})</i>` : ''}
 ⏰ <b>Time:</b> ${timeFormatted}
 👤 <b>Teacher:</b> ${booking.teacherName}
 🎓 <b>Class:</b> ${booking.className}
 🎯 <b>Purpose:</b> ${booking.title}
-${isRecurring ? `🔁 <b>Frequency:</b> Every week until ${booking.recurringUntil}\n` : ''}${isPrebooking && booking.prebookingReason ? `📋 <b>Pre-booking Info:</b> ${booking.prebookingReason}\n` : ''}
-${booking.notes ? `💬 <b>Teacher Remarks:</b> <i>${booking.notes}</i>\n` : ''}
-✅ <i>Confirmed & logged on the school calendar.</i>`;
+${isRecurring ? `🔁 <b>Frequency:</b> Every week until ${booking.recurringUntil}\n` : ''}${isPrebooking && booking.prebookingReason ? `📋 <b>Pre-booking Note:</b> ${booking.prebookingReason}\n` : ''}${booking.notes ? `💬 <b>Remarks:</b> ${booking.notes}\n` : ''}
+
+✅ Confirmed & logged on the calendar.`;
 }
 
 export async function sendTelegramNotification(
@@ -101,8 +154,9 @@ export async function sendTelegramNotification(
       parse_mode: 'HTML',
       disable_web_page_preview: true,
     };
-    if (config.threadId) {
-      payload.message_thread_id = config.threadId;
+    const parsedId = parseTelegramThreadId(config.threadId);
+    if (parsedId !== undefined) {
+      payload.message_thread_id = parsedId;
     }
 
     const directRes = await fetch(
@@ -138,13 +192,14 @@ export async function sendTelegramNotification(
 
 export async function testTelegramConnection(
   token: string,
-  chatId: string
+  chatId: string,
+  threadId?: string
 ): Promise<{ success: boolean; message: string; botUsername?: string }> {
   try {
     const res = await fetch('/api/telegram/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, chatId }),
+      body: JSON.stringify({ token, chatId, threadId }),
     });
     if (res.ok) {
       return await res.json();
@@ -160,27 +215,40 @@ export async function testTelegramConnection(
     const username = botData.result?.username;
 
     if (chatId) {
+      const parsedTopic = parseTelegramThreadId(threadId);
+      const isTopicTarget = parsedTopic !== undefined;
+      const testMsg = isTopicTarget
+        ? `🔔 <b>${SCHOOL_NAME}</b>\n📍 <b>${LAB_NAME}</b>\n\n✅ Bot connection verified successfully for Topic #${parsedTopic}!\n📅 Timestamp: ${new Date().toLocaleString()}\n\nEnglish Lab notifications will be posted strictly in this topic.`
+        : `🔔 <b>${SCHOOL_NAME}</b>\n📍 <b>${LAB_NAME}</b>\n\n✅ Bot connection verified successfully!\n📅 Timestamp: ${new Date().toLocaleString()}\n\nEnglish Lab notifications will be posted to this group.`;
+
+      const payload: Record<string, any> = {
+        chat_id: chatId,
+        text: testMsg,
+        parse_mode: 'HTML',
+      };
+      if (isTopicTarget) {
+        payload.message_thread_id = parsedTopic;
+      }
+
       const msgRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: `🔔 <b>${SCHOOL_NAME}</b>\n📍 <b>${LAB_NAME}</b>\n\n✅ Bot connection verified successfully!\n📅 Timestamp: ${new Date().toLocaleString()}\n\nEnglish Lab notifications will be posted to this group.`,
-          parse_mode: 'HTML',
-        }),
+        body: JSON.stringify(payload),
       });
       const msgData = await msgRes.json();
       if (!msgData.ok) {
         return {
           success: false,
           botUsername: username,
-          message: `Bot @${username} is valid, but message to Chat ID ${chatId} failed: ${msgData.description}. Ensure the bot is added to your Telegram group!`,
+          message: `Bot @${username} is valid, but message to Chat ID ${chatId} failed: ${msgData.description}. ${isTopicTarget ? 'Ensure the Topic ID is valid and the bot has permission to post in this topic.' : 'Ensure the bot is added to your Telegram group!'}`,
         };
       }
       return {
         success: true,
         botUsername: username,
-        message: `Successfully connected to Telegram group "${msgData.result?.chat?.title || chatId}"!`,
+        message: isTopicTarget
+          ? `Successfully sent test message directly to Topic #${threadId} in "${msgData.result?.chat?.title || chatId}"!`
+          : `Successfully connected to Telegram group "${msgData.result?.chat?.title || chatId}"!`,
       };
     }
 

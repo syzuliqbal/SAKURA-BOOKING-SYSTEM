@@ -13,19 +13,21 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { Booking } from '../types';
-import { CALENDAR_HOURS, formatTime12h, calculateDurationHours } from '../data/timeSlots';
+import { CALENDAR_HOURS, TIMETABLE_PERIODS, formatTime12h, calculateDurationHours } from '../data/timeSlots';
 
 interface BookingCalendarProps {
   bookings: Booking[];
+  schoolLogo?: string | null;
   onSelectBooking: (booking: Booking) => void;
   onQuickBookSlot: (date: string, startTime: string) => void;
-  onOpenBookingModal: (isPrebooking?: boolean) => void;
+  onOpenBookingModal: (isPrebooking?: boolean, date?: string, startTime?: string) => void;
 }
 
 type CalendarViewMode = 'week' | 'month' | 'day';
 
 export const BookingCalendar: React.FC<BookingCalendarProps> = ({
   bookings,
+  schoolLogo,
   onSelectBooking,
   onQuickBookSlot,
   onOpenBookingModal,
@@ -122,7 +124,54 @@ export const BookingCalendar: React.FC<BookingCalendarProps> = ({
     setCurrentDate(next);
   };
 
-  // Check if a booking falls within an hour block (e.g., starts at or overlaps with hour)
+  // Detailed 30-minute status for an hour block
+  const getHourSlotStatus = (dateStr: string, hourStr: string) => {
+    const [h] = hourStr.split(':').map(Number);
+    const hStartMin = h * 60;
+    const hMidMin = h * 60 + 30;
+    const hEndMin = (h + 1) * 60;
+    const timeStr1 = `${h.toString().padStart(2, '0')}:00`;
+    const timeStr2 = `${h.toString().padStart(2, '0')}:30`;
+    const nextHourStr = `${(h + 1).toString().padStart(2, '0')}:00`;
+
+    const dayBookings = filteredBookings.filter(b => b.date === dateStr);
+
+    // Booking active in first 30 mins (:00 - :30)
+    const b1 = dayBookings.find(b => {
+      const [sh, sm] = b.startTime.split(':').map(Number);
+      const [eh, em] = b.endTime.split(':').map(Number);
+      const sMin = sh * 60 + sm;
+      const eMin = eh * 60 + em;
+      return sMin < hMidMin && eMin > hStartMin;
+    });
+
+    // Booking active in second 30 mins (:30 - :00)
+    const b2 = dayBookings.find(b => {
+      const [sh, sm] = b.startTime.split(':').map(Number);
+      const [eh, em] = b.endTime.split(':').map(Number);
+      const sMin = sh * 60 + sm;
+      const eMin = eh * 60 + em;
+      return sMin < hEndMin && eMin > hMidMin;
+    });
+
+    const isFullHourSameBooking = Boolean(b1 && b2 && b1.id === b2.id);
+
+    return {
+      hourStr,
+      hStartMin,
+      hMidMin,
+      hEndMin,
+      timeStr1,
+      timeStr2,
+      nextHourStr,
+      isFullHourSameBooking,
+      fullBooking: isFullHourSameBooking ? b1 : undefined,
+      slot1Booking: b1,
+      slot2Booking: b2,
+    };
+  };
+
+  // Check if a booking falls within an hour block (for fallback metrics)
   const getBookingsForHourAndDate = (dateStr: string, hourStr: string) => {
     const [h] = hourStr.split(':').map(Number);
     const hourStartMin = h * 60;
@@ -134,7 +183,6 @@ export const BookingCalendar: React.FC<BookingCalendarProps> = ({
       const [eh, em] = b.endTime.split(':').map(Number);
       const bStartMin = sh * 60 + sm;
       const bEndMin = eh * 60 + em;
-      // Overlaps with this hour window:
       return bStartMin < hourEndMin && bEndMin > hourStartMin;
     });
   };
@@ -290,135 +338,196 @@ export const BookingCalendar: React.FC<BookingCalendarProps> = ({
         </div>
       </div>
 
-      {/* WEEK VIEW (Fixed Grid Dimensions) */}
+      {/* WEEK VIEW (Dates on Left, 30-Min Time Periods on Top) */}
       {viewMode === 'week' && (
         <div>
-          <div className="lg:hidden px-3.5 py-1.5 bg-stone-50 border-b border-stone-200 text-[11px] text-stone-500 flex items-center justify-between">
-            <span>👈 Swipe horizontally to view week 👉</span>
-            <span className="font-semibold text-rose-800">Tap slot to book</span>
+          <div className="px-3.5 py-2 bg-stone-50 border-b border-stone-200 text-xs text-stone-500 flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <span>👈 Scroll horizontally to view all 30-min time periods (7:00 AM – 5:00 PM) 👉</span>
+            </span>
+            <span className="font-semibold text-rose-800">Click any Free box to book</span>
           </div>
-          <div className="overflow-x-auto">
-            <table className="table-fixed w-full border-collapse min-w-[750px] sm:min-w-[850px] text-xs">
-            <thead>
-              <tr className="bg-stone-50 border-b border-stone-200">
-                <th className="py-2.5 px-3 text-left font-bold text-stone-600 w-20 min-w-20 max-w-20 border-r border-stone-200">
-                  Time
-                </th>
+
+          <div className="overflow-x-auto select-none">
+            <table className="w-full border-collapse min-w-[2600px] text-xs">
+              <thead>
+                <tr className="bg-stone-50 border-b border-stone-200">
+                  {/* Left Header: Date & Day */}
+                  <th className="sticky left-0 z-20 bg-stone-100/95 backdrop-blur-xs py-3 px-3.5 text-left font-bold text-stone-700 w-44 min-w-44 max-w-44 border-r border-stone-200 shadow-xs">
+                    <div className="flex items-center gap-1.5">
+                      <CalendarIcon className="w-3.5 h-3.5 text-rose-700" />
+                      <span>Date &amp; Day</span>
+                    </div>
+                  </th>
+
+                  {/* Top Columns: 30-minute Time Periods */}
+                  {TIMETABLE_PERIODS.map(period => (
+                    <th
+                      key={period.startTime}
+                      className={`py-2 px-2 text-center border-r border-stone-200 font-semibold min-w-[130px] ${
+                        period.isRehat ? 'bg-amber-50/70 text-amber-950' : 'bg-stone-50 text-stone-700'
+                      }`}
+                    >
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-stone-500">
+                        {period.isRehat ? 'Recess / Rehat' : `Period ${period.periodNumber || ''}`}
+                      </div>
+                      <div className="font-mono text-xs font-bold mt-0.5 text-stone-800">
+                        {period.timeLabel}
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-stone-200">
                 {weekDays.map(day => {
                   const dayStr = formatDateISO(day);
                   const isToday = dayStr === todayStr;
+                  const dayBookings = filteredBookings.filter(b => b.date === dayStr);
+
                   return (
-                    <th
+                    <tr
                       key={dayStr}
-                      style={{ width: `calc((100% - 5rem) / ${weekDays.length})` }}
-                      className={`py-2 px-2 text-center font-semibold border-r border-stone-200 last:border-r-0 min-w-[110px] ${
-                        isToday ? 'bg-rose-50/70 text-rose-950 font-bold' : 'text-stone-700'
+                      className={`hover:bg-stone-50/30 transition-colors h-24 ${
+                        isToday ? 'bg-rose-50/15' : ''
                       }`}
                     >
-                      <div className="text-[11px] uppercase tracking-wider text-stone-400">
-                        {day.toLocaleDateString('en-US', { weekday: 'short' })}
-                      </div>
-                      <div className="text-sm font-bold mt-0.5 flex items-center justify-center gap-1">
-                        <span>{day.getDate()}</span>
+                      {/* Left Sticky Cell: Day & Date */}
+                      <td
+                        className={`sticky left-0 z-10 border-r border-stone-200 p-3 w-44 min-w-44 max-w-44 align-middle shadow-xs ${
+                          isToday ? 'bg-rose-50/95' : 'bg-white'
+                        }`}
+                      >
+                        <div className="font-bold text-sm text-stone-900 leading-snug">
+                          {day.toLocaleDateString('en-US', { weekday: 'long' })}
+                        </div>
+                        <div className="text-[11px] text-stone-500 font-medium mt-0.5">
+                          {day.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </div>
                         {isToday && (
-                          <span className="w-2 h-2 rounded-full bg-rose-400 inline-block"></span>
+                          <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-rose-200/90 text-rose-950 font-bold text-[10px] border border-rose-300">
+                            ● Today
+                          </span>
                         )}
-                      </div>
-                    </th>
+                      </td>
+
+                      {/* Period Cells with Continuous colSpan for multi-period sessions */}
+                      {(() => {
+                        const cells: React.ReactNode[] = [];
+                        let i = 0;
+
+                        while (i < TIMETABLE_PERIODS.length) {
+                          const period = TIMETABLE_PERIODS[i];
+                          const [psh, psm] = period.startTime.split(':').map(Number);
+                          const [peh, pem] = period.endTime.split(':').map(Number);
+                          const pStartMin = psh * 60 + psm;
+                          const pEndMin = peh * 60 + pem;
+
+                          const overlappingBooking = dayBookings.find(b => {
+                            const [bsh, bsm] = b.startTime.split(':').map(Number);
+                            const [beh, bem] = b.endTime.split(':').map(Number);
+                            const bStartMin = bsh * 60 + bsm;
+                            const bEndMin = beh * 60 + bem;
+                            return bStartMin < pEndMin && bEndMin > pStartMin;
+                          });
+
+                          if (overlappingBooking) {
+                            // Calculate how many periods this booking spans from i
+                            let span = 1;
+                            while (i + span < TIMETABLE_PERIODS.length) {
+                              const nextPeriod = TIMETABLE_PERIODS[i + span];
+                              const [nsh, nsm] = nextPeriod.startTime.split(':').map(Number);
+                              const [neh, nem] = nextPeriod.endTime.split(':').map(Number);
+                              const nStartMin = nsh * 60 + nsm;
+                              const nEndMin = neh * 60 + nem;
+
+                              const [bsh, bsm] = overlappingBooking.startTime.split(':').map(Number);
+                              const [beh, bem] = overlappingBooking.endTime.split(':').map(Number);
+                              const bStartMin = bsh * 60 + bsm;
+                              const bEndMin = beh * 60 + bem;
+
+                              if (bStartMin < nEndMin && bEndMin > nStartMin) {
+                                span++;
+                              } else {
+                                break;
+                              }
+                            }
+
+                            cells.push(
+                              <td
+                                key={`${dayStr}-${period.startTime}`}
+                                colSpan={span}
+                                className="p-1.5 border-r border-stone-200 align-middle h-24 min-w-[130px]"
+                              >
+                                <div
+                                  onClick={() => onSelectBooking(overlappingBooking)}
+                                  className={`h-full w-full rounded-xl p-2.5 text-left cursor-pointer transition-all border shadow-2xs hover:shadow-xs flex flex-col justify-between overflow-hidden ${
+                                    overlappingBooking.isPrebooking
+                                      ? 'bg-amber-50/95 border-amber-300 hover:border-amber-400 text-amber-950'
+                                      : 'bg-teal-50/95 border-teal-300 hover:border-teal-400 text-teal-950'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between leading-none gap-1">
+                                    <span className="font-bold text-xs truncate">
+                                      {overlappingBooking.className}
+                                    </span>
+                                    <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded bg-black/5 shrink-0 ml-1">
+                                      {formatTime12h(overlappingBooking.startTime)} - {formatTime12h(overlappingBooking.endTime)}
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px] font-medium text-stone-800 truncate line-clamp-1 my-1" title={overlappingBooking.title}>
+                                    {overlappingBooking.title}
+                                  </div>
+                                  <div className="flex items-center justify-between text-[10px] text-stone-600 leading-none">
+                                    <span className="truncate font-semibold">{overlappingBooking.teacherName}</span>
+                                    {overlappingBooking.isPrebooking && (
+                                      <span title="Advance Pre-booking" className="shrink-0 text-amber-800 flex items-center gap-0.5 font-bold">
+                                        <BookmarkPlus className="w-3 h-3" />
+                                        <span>Pre-book</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                            );
+
+                            i += span;
+                          } else {
+                            // Free slot box
+                            cells.push(
+                              <td
+                                key={`${dayStr}-${period.startTime}`}
+                                colSpan={1}
+                                className={`p-1.5 border-r border-stone-200 align-middle h-24 min-w-[130px] ${
+                                  period.isRehat ? 'bg-amber-50/20' : ''
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => onQuickBookSlot(dayStr, period.startTime)}
+                                  className="w-full h-full rounded-xl border border-dashed border-stone-200 hover:border-emerald-500 hover:bg-emerald-50/50 flex flex-col items-center justify-center gap-1 text-stone-400 hover:text-emerald-800 transition-all group p-1 shadow-2xs"
+                                  title={`Available: Book ${period.timeLabel} on ${dayStr}`}
+                                >
+                                  <Plus className="w-4 h-4 group-hover:scale-110 transition-transform text-stone-400 group-hover:text-emerald-700" />
+                                  <span className="text-[10px] font-bold">
+                                    {period.isRehat ? 'Rehat (Free)' : 'Available'}
+                                  </span>
+                                </button>
+                              </td>
+                            );
+
+                            i++;
+                          }
+                        }
+
+                        return cells;
+                      })()}
+                    </tr>
                   );
                 })}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-stone-200">
-              {CALENDAR_HOURS.map(hour => {
-                return (
-                  <tr key={hour} className="hover:bg-stone-50/30 h-[76px] max-h-[76px]">
-                    {/* Time Label on left */}
-                    <td className="py-2.5 px-2.5 border-r border-stone-200 bg-stone-50/60 align-top w-20 min-w-20 max-w-20 h-[76px] max-h-[76px]">
-                      <span className="font-mono text-stone-500 font-semibold text-[11px] block">
-                        {formatTime12h(hour)}
-                      </span>
-                    </td>
-
-                    {/* Day Column Cells */}
-                    {weekDays.map(day => {
-                      const dayStr = formatDateISO(day);
-                      const isToday = dayStr === todayStr;
-                      const hourBookings = getBookingsForHourAndDate(dayStr, hour);
-
-                      return (
-                        <td
-                          key={dayStr}
-                          style={{ width: `calc((100% - 5rem) / ${weekDays.length})` }}
-                          className={`p-1 border-r border-stone-200 last:border-r-0 align-top min-w-[110px] h-[76px] max-h-[76px] transition-colors relative overflow-hidden ${
-                            isToday ? 'bg-rose-50/15' : ''
-                          }`}
-                        >
-                          <div className="h-full w-full overflow-hidden flex flex-col justify-start">
-                            {hourBookings.length > 0 ? (
-                              <div className="h-full flex flex-col gap-1 overflow-hidden">
-                                {hourBookings.slice(0, 1).map(booking => {
-                                  return (
-                                    <div
-                                      key={booking.id}
-                                      onClick={() => onSelectBooking(booking)}
-                                      className={`h-full max-h-[66px] rounded-xl p-1.5 text-left cursor-pointer transition-all border shadow-2xs hover:shadow-xs flex flex-col justify-between overflow-hidden ${
-                                        booking.isPrebooking
-                                          ? 'bg-amber-50/95 border-amber-200 hover:border-amber-300'
-                                          : 'bg-teal-50/95 border-teal-200 hover:border-teal-300'
-                                      }`}
-                                    >
-                                      {/* 1. Class First */}
-                                      <div className="flex items-center justify-between leading-none">
-                                        <span className="font-bold text-stone-900 text-[11px] truncate">
-                                          {booking.className}
-                                        </span>
-                                        {booking.isPrebooking && (
-                                          <span title="Advance Pre-booking" className="shrink-0 ml-0.5">
-                                            <BookmarkPlus className="w-3 h-3 text-amber-700" />
-                                          </span>
-                                        )}
-                                      </div>
-
-                                      {/* 2. Reason for booking */}
-                                      <div className="text-[10px] text-stone-700 truncate leading-tight font-medium" title={booking.title}>
-                                        {booking.title}
-                                      </div>
-
-                                      {/* 3. Name of the teacher */}
-                                      <div className="text-[10px] text-stone-500 truncate leading-none">
-                                        {booking.teacherName}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-
-                                {hourBookings.length > 1 && (
-                                  <div className="text-[9px] font-bold text-stone-500 text-center bg-stone-100 rounded py-0.5">
-                                    +{hourBookings.length - 1} more
-                                  </div>
-                                )}
-                              </div>
-                            ) : (
-                              /* Clickable Empty Time Slot */
-                              <button
-                                onClick={() => onQuickBookSlot(dayStr, hour)}
-                                className="w-full h-full max-h-[66px] rounded-xl border border-dashed border-stone-200 hover:border-rose-300 hover:bg-rose-50/30 flex items-center justify-center text-stone-300 hover:text-rose-700 transition-all opacity-20 hover:opacity-100 p-1"
-                                title={`Book English Lab starting at ${formatTime12h(hour)} on ${dayStr}`}
-                              >
-                                <Plus className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -507,96 +616,185 @@ export const BookingCalendar: React.FC<BookingCalendarProps> = ({
         </div>
       )}
 
-      {/* DAY VIEW */}
+      {/* DAY VIEW (Accurate 30-Minute Schedule) */}
       {viewMode === 'day' && (
-        <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-3">
-          <div className="flex items-center justify-between bg-stone-50 p-3.5 rounded-xl border border-stone-200">
+        <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-4">
+          <div className="flex items-center justify-between bg-stone-50 p-4 rounded-xl border border-stone-200 shadow-2xs">
             <div>
               <h3 className="font-bold text-stone-800 text-base">
                 {currentDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
               </h3>
-              <p className="text-xs text-stone-500">English Language Lab Daily Schedule</p>
+              <p className="text-xs text-stone-500 mt-0.5">
+                Accurate 30-minute interval timetable for English Language Lab
+              </p>
             </div>
             <button
-              onClick={() => onQuickBookSlot(formatDateISO(currentDate), '07:00')}
+              onClick={() => {
+                const dStr = formatDateISO(currentDate);
+                const todayStr = formatDateISO(new Date());
+                onOpenBookingModal(dStr > todayStr, dStr);
+              }}
               className="text-xs font-semibold px-3.5 py-2 rounded-xl bg-rose-200/90 text-rose-950 hover:bg-rose-200 inline-flex items-center gap-1.5 shadow-2xs border border-rose-300"
             >
               <Plus className="w-3.5 h-3.5" /> Book on this Day
             </button>
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
             {CALENDAR_HOURS.map(hour => {
               const dStr = formatDateISO(currentDate);
-              const hourBookings = getBookingsForHourAndDate(dStr, hour);
+              const status = getHourSlotStatus(dStr, hour);
 
               return (
                 <div
                   key={hour}
-                  className={`p-3 rounded-xl border transition-all ${
-                    hourBookings.length > 0
-                      ? 'bg-white border-stone-200 shadow-2xs'
-                      : 'bg-stone-50/30 border-dashed border-stone-200'
-                  }`}
+                  className="p-3.5 rounded-2xl border border-stone-200 bg-white shadow-2xs space-y-2.5"
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-start gap-3">
-                      <div className="w-24 shrink-0">
-                        <span className="font-mono text-stone-500 font-semibold text-xs block">
-                          {formatTime12h(hour)}
-                        </span>
+                  {/* Hour Header */}
+                  <div className="flex items-center justify-between border-b border-stone-100 pb-2">
+                    <span className="font-mono font-bold text-xs text-stone-800 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-stone-400" />
+                      <span>{formatTime12h(hour)} – {formatTime12h(status.nextHourStr)}</span>
+                    </span>
+                    {status.isFullHourSameBooking ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-50 text-teal-800 border border-teal-200">
+                        1-Hour Session
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-stone-400 font-medium">
+                        30-minute intervals
+                      </span>
+                    )}
+                  </div>
+
+                  {status.isFullHourSameBooking && status.fullBooking ? (
+                    /* Unified Full 1-Hour Session */
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-xl bg-stone-50 border border-stone-200 gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-xs text-stone-900">
+                            {status.fullBooking.className}
+                          </span>
+                          <span className="font-mono text-xs text-stone-600 bg-white px-2 py-0.5 rounded border border-stone-200">
+                            {formatTime12h(status.fullBooking.startTime)} - {formatTime12h(status.fullBooking.endTime)}
+                          </span>
+                          {status.fullBooking.isPrebooking && (
+                            <span className="text-[10px] font-bold bg-amber-50 text-amber-800 px-1.5 py-0.5 rounded border border-amber-200">
+                              Pre-Booked
+                            </span>
+                          )}
+                        </div>
+                        <h4
+                          onClick={() => onSelectBooking(status.fullBooking!)}
+                          className="font-semibold text-xs text-stone-800 hover:text-rose-700 cursor-pointer"
+                        >
+                          {status.fullBooking.title}
+                        </h4>
+                        <p className="text-[11px] text-stone-500">
+                          Instructor: <strong>{status.fullBooking.teacherName}</strong>
+                        </p>
                       </div>
 
-                      {hourBookings.length > 0 ? (
-                        <div className="space-y-2 flex-1">
-                          {hourBookings.map(b => (
-                            <div key={b.id} className="flex items-center justify-between gap-2">
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <h4
-                                    onClick={() => onSelectBooking(b)}
-                                    className="font-bold text-stone-900 text-xs hover:text-rose-700 cursor-pointer"
-                                  >
-                                    {b.title}
-                                  </h4>
-                                  {b.isPrebooking && (
-                                    <span className="text-[10px] font-bold bg-amber-50 text-amber-800 px-1.5 py-0.2 rounded border border-amber-200">
-                                      Pre-Booked
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-xs text-stone-600 mt-0.5">
-                                  <span className="font-mono text-stone-500 font-medium">{formatTime12h(b.startTime)} - {formatTime12h(b.endTime)}</span> • <strong className="text-stone-800">{b.teacherName}</strong> • {b.className}
-                                </p>
-                              </div>
+                      <button
+                        type="button"
+                        onClick={() => onSelectBooking(status.fullBooking!)}
+                        className="text-xs font-semibold text-rose-700 hover:text-rose-900 px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 transition-colors self-start sm:self-auto shrink-0"
+                      >
+                        View Details
+                      </button>
+                    </div>
+                  ) : (
+                    /* Dual 30-Minute Breakdowns */
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {/* 1st Half: :00 - :30 */}
+                      <div className="p-2.5 rounded-xl border border-stone-200 bg-stone-50/50">
+                        <div className="text-[10px] font-mono text-stone-500 font-semibold mb-1 flex items-center justify-between">
+                          <span>{formatTime12h(status.timeStr1)} - {formatTime12h(status.timeStr2)}</span>
+                          {status.slot1Booking ? (
+                            <span className="font-bold text-stone-700">Booked</span>
+                          ) : (
+                            <span className="font-bold text-emerald-700">Available</span>
+                          )}
+                        </div>
 
+                        {status.slot1Booking ? (
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-xs text-stone-900">{status.slot1Booking.className}</span>
                               <button
-                                onClick={() => onSelectBooking(b)}
-                                className="text-xs font-semibold text-rose-700 hover:text-rose-900 px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 transition-colors"
+                                type="button"
+                                onClick={() => onSelectBooking(status.slot1Booking!)}
+                                className="text-[11px] text-rose-700 font-semibold hover:underline"
                               >
                                 View
                               </button>
                             </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="text-stone-400 text-xs py-1">
-                          No booking starting at this hour
-                        </div>
-                      )}
-                    </div>
-
-                    {hourBookings.length === 0 && (
-                      <div>
-                        <button
-                          onClick={() => onQuickBookSlot(dStr, hour)}
-                          className="text-xs font-semibold text-stone-600 hover:text-rose-700 px-3 py-1.5 rounded-lg border border-stone-300 hover:border-rose-300 hover:bg-rose-50 transition-colors flex items-center gap-1"
-                        >
-                          <Plus className="w-3.5 h-3.5" /> Book
-                        </button>
+                            <p className="text-[11px] text-stone-700 font-medium truncate" title={status.slot1Booking.title}>
+                              {status.slot1Booking.title}
+                            </p>
+                            <p className="text-[10px] text-stone-500">
+                              {status.slot1Booking.teacherName} • <span className="font-mono">{formatTime12h(status.slot1Booking.startTime)}-{formatTime12h(status.slot1Booking.endTime)}</span>
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between pt-1">
+                            <span className="text-[11px] text-emerald-700">Free (30 mins)</span>
+                            <button
+                              type="button"
+                              onClick={() => onQuickBookSlot(dStr, status.timeStr1)}
+                              className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 px-2.5 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 transition-colors flex items-center gap-1"
+                            >
+                              <Plus className="w-3 h-3" /> Book 30m
+                            </button>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+
+                      {/* 2nd Half: :30 - :00 */}
+                      <div className="p-2.5 rounded-xl border border-stone-200 bg-stone-50/50">
+                        <div className="text-[10px] font-mono text-stone-500 font-semibold mb-1 flex items-center justify-between">
+                          <span>{formatTime12h(status.timeStr2)} - {formatTime12h(status.nextHourStr)}</span>
+                          {status.slot2Booking ? (
+                            <span className="font-bold text-stone-700">Booked</span>
+                          ) : (
+                            <span className="font-bold text-emerald-700">Available</span>
+                          )}
+                        </div>
+
+                        {status.slot2Booking ? (
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-xs text-stone-900">{status.slot2Booking.className}</span>
+                              <button
+                                type="button"
+                                onClick={() => onSelectBooking(status.slot2Booking!)}
+                                className="text-[11px] text-rose-700 font-semibold hover:underline"
+                              >
+                                View
+                              </button>
+                            </div>
+                            <p className="text-[11px] text-stone-700 font-medium truncate" title={status.slot2Booking.title}>
+                              {status.slot2Booking.title}
+                            </p>
+                            <p className="text-[10px] text-stone-500">
+                              {status.slot2Booking.teacherName} • <span className="font-mono">{formatTime12h(status.slot2Booking.startTime)}-{formatTime12h(status.slot2Booking.endTime)}</span>
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between pt-1">
+                            <span className="text-[11px] text-emerald-700">Free (30 mins)</span>
+                            <button
+                              type="button"
+                              onClick={() => onQuickBookSlot(dStr, status.timeStr2)}
+                              className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 px-2.5 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 transition-colors flex items-center gap-1"
+                            >
+                              <Plus className="w-3 h-3" /> Book 30m
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   X, 
   Calendar, 
@@ -9,10 +9,12 @@ import {
   CheckCircle2,
   Users,
   GraduationCap,
-  Repeat
+  Repeat,
+  Check,
+  Sparkles
 } from 'lucide-react';
 import { Booking, TelegramConfig, ClassGroup } from '../types';
-import { TIME_OPTIONS, formatTime12h, calculateDurationHours } from '../data/timeSlots';
+import { TIME_OPTIONS, TIMETABLE_PERIODS, formatTime12h, calculateDurationHours, DEFAULT_PURPOSES } from '../data/timeSlots';
 
 interface BookingModalProps {
   isOpen: boolean;
@@ -22,9 +24,11 @@ interface BookingModalProps {
   teachersList: string[];
   classesList: string[];
   classGroups?: ClassGroup[];
+  purposesList?: string[];
   initialDate?: string;
   initialStartTime?: string;
   initialIsPrebooking?: boolean;
+  onModeChange?: (isPrebooking: boolean) => void;
   telegramConfig: TelegramConfig;
 }
 
@@ -36,20 +40,31 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   teachersList,
   classesList,
   classGroups = [],
+  purposesList = [],
   initialDate,
   initialStartTime,
   initialIsPrebooking = false,
+  onModeChange,
   telegramConfig,
 }) => {
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
   
+  // Available purposes
+  const availablePurposes = useMemo(() => {
+    return purposesList && purposesList.length > 0 ? purposesList : DEFAULT_PURPOSES;
+  }, [purposesList]);
+
   // If opening for a future date, default to isPrebooking = true
   const [isPrebooking, setIsPrebooking] = useState(() => {
     if (initialDate && initialDate > todayStr) return true;
     return initialIsPrebooking;
   });
 
-  const [title, setTitle] = useState('');
+  const [selectedPurpose, setSelectedPurpose] = useState<string>(() => {
+    return availablePurposes[0] || 'Teaching and Learning (PdPc)';
+  });
+  const [customPurpose, setCustomPurpose] = useState('');
+
   const [teacherName, setTeacherName] = useState(teachersList[0] || '');
   const [date, setDate] = useState(() => {
     if (initialIsPrebooking || (initialDate && initialDate > todayStr)) {
@@ -57,8 +72,17 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     }
     return todayStr;
   });
-  const [startTime, setStartTime] = useState(initialStartTime || '07:00');
-  const [endTime, setEndTime] = useState('08:00');
+  const [startTime, setStartTime] = useState(initialStartTime || '');
+  const [endTime, setEndTime] = useState(() => {
+    if (initialStartTime) {
+      const [h, m] = initialStartTime.split(':').map(Number);
+      const endTotalMin = Math.min(h * 60 + m + 30, 17 * 60);
+      const endH = Math.floor(endTotalMin / 60).toString().padStart(2, '0');
+      const endM = (endTotalMin % 60).toString().padStart(2, '0');
+      return `${endH}:${endM}`;
+    }
+    return '';
+  });
 
   // Class Group Selection
   const [selectedGroupId, setSelectedGroupId] = useState<string>(() => {
@@ -85,7 +109,6 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   // Recurring booking state (Weekly until a specified end date)
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurringUntil, setRecurringUntil] = useState(() => {
-    // Default until end of November 2026 or 6 weeks ahead
     const d = new Date();
     d.setDate(d.getDate() + 42); // 6 weeks ahead
     return d.toISOString().split('T')[0];
@@ -95,48 +118,197 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
-  // Sync initial props
+  // Track open state so that background data syncs NEVER reset user inputs while modal is open
+  const wasOpenRef = useRef(false);
+
+  // Sync initial props ONCE on modal open
   useEffect(() => {
-    if (initialDate) {
-      if (initialDate > todayStr) {
-        setIsPrebooking(true);
-        setDate(initialDate);
-      } else {
-        setDate(initialDate);
+    if (isOpen) {
+      if (!wasOpenRef.current) {
+        wasOpenRef.current = true;
+
+        let shouldPrebook = false;
+        if (initialDate && initialDate > todayStr) {
+          shouldPrebook = true;
+          setDate(initialDate);
+        } else if (initialIsPrebooking) {
+          shouldPrebook = true;
+          const tmrw = new Date();
+          tmrw.setDate(tmrw.getDate() + 1);
+          setDate(initialDate && initialDate > todayStr ? initialDate : tmrw.toISOString().split('T')[0]);
+        } else {
+          shouldPrebook = false;
+          setDate(todayStr);
+        }
+
+        setIsPrebooking(shouldPrebook);
+
+        if (initialStartTime) {
+          setStartTime(initialStartTime);
+          const [h, m] = initialStartTime.split(':').map(Number);
+          const endTotalMin = Math.min(h * 60 + m + 30, 17 * 60);
+          const endH = Math.floor(endTotalMin / 60).toString().padStart(2, '0');
+          const endM = (endTotalMin % 60).toString().padStart(2, '0');
+          setEndTime(`${endH}:${endM}`);
+        } else {
+          setStartTime('');
+          setEndTime('');
+        }
+
+        if (teachersList.length > 0) {
+          setTeacherName(prev => prev || teachersList[0]);
+        }
+        if (classGroups.length > 0) {
+          const activeGrp = classGroups.find(g => g.id === selectedGroupId) || classGroups[0];
+          setSelectedGroupId(activeGrp.id);
+          setClassName(activeGrp.subclasses[0] || '');
+        }
+        if (availablePurposes.length > 0) {
+          setSelectedPurpose(prev => prev || availablePurposes[0]);
+        }
       }
+    } else {
+      wasOpenRef.current = false;
     }
-    if (initialStartTime) {
-      setStartTime(initialStartTime);
-      const [h, m] = initialStartTime.split(':').map(Number);
-      const endH = Math.min(h + 1, 17);
-      setEndTime(`${endH.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
-    }
-    if (initialIsPrebooking !== undefined) {
-      setIsPrebooking(initialIsPrebooking);
-      if (!initialIsPrebooking) setDate(todayStr);
-    }
-    if (teachersList.length > 0 && (!teacherName || !teachersList.includes(teacherName))) {
-      setTeacherName(teachersList[0]);
-    }
-    if (classGroups.length > 0) {
-      const activeGrp = classGroups.find(g => g.id === selectedGroupId) || classGroups[0];
-      setSelectedGroupId(activeGrp.id);
-      if (!className || !activeGrp.subclasses.includes(className)) {
-        setClassName(activeGrp.subclasses[0] || '');
-      }
-    } else if (classesList.length > 0 && (!className || !classesList.includes(className))) {
-      setClassName(classesList[0]);
-    }
-  }, [initialDate, initialStartTime, initialIsPrebooking, teachersList, classesList, classGroups, isOpen, todayStr]);
+  }, [isOpen, initialStartTime, initialDate, initialIsPrebooking]);
 
   // Handle switching booking mode
   const handleModeSwitch = (prebookingMode: boolean) => {
     setIsPrebooking(prebookingMode);
+    onModeChange?.(prebookingMode);
+
     if (!prebookingMode) {
       // Standard booking is strictly on the day itself
       setDate(todayStr);
       setIsRecurring(false);
+    } else {
+      // Pre-booking is for future dates: advance to tomorrow if currently today
+      if (date <= todayStr) {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        setDate(tomorrow.toISOString().split('T')[0]);
+      }
     }
+  };
+
+  // Selected date for checking availability
+  const effectiveDate = isPrebooking ? date : todayStr;
+
+  // Real-time slot availability for effectiveDate
+  const daySlotAvailability = useMemo(() => {
+    const activeBookingsOnDate = existingBookings.filter(
+      b => b.status !== 'cancelled' && b.date === effectiveDate
+    );
+
+    const hasSelection = Boolean(
+      startTime && endTime && startTime.includes(':') && endTime.includes(':')
+    );
+    const [selStartH, selStartM] = hasSelection ? startTime.split(':').map(Number) : [0, 0];
+    const [selEndH, selEndM] = hasSelection ? endTime.split(':').map(Number) : [0, 0];
+    const selStartMin = hasSelection ? selStartH * 60 + selStartM : -1;
+    const selEndMin = hasSelection ? selEndH * 60 + selEndM : -1;
+
+    return TIMETABLE_PERIODS.map(period => {
+      const [psh, psm] = period.startTime.split(':').map(Number);
+      const [peh, pem] = period.endTime.split(':').map(Number);
+      const pStartMin = psh * 60 + psm;
+      const pEndMin = peh * 60 + pem;
+
+      const overlapping = activeBookingsOnDate.find(b => {
+        const [bsh, bsm] = b.startTime.split(':').map(Number);
+        const [beh, bem] = b.endTime.split(':').map(Number);
+        const bStartMin = bsh * 60 + bsm;
+        const bEndMin = beh * 60 + bem;
+        return bStartMin < pEndMin && bEndMin > pStartMin;
+      });
+
+      const isSelected = hasSelection && pStartMin >= selStartMin && pEndMin <= selEndMin;
+      const isAdjacent =
+        hasSelection &&
+        !isSelected &&
+        !overlapping &&
+        (period.startTime === endTime || period.endTime === startTime);
+
+      return {
+        period,
+        isBooked: Boolean(overlapping),
+        booking: overlapping,
+        isSelected,
+        isAdjacent,
+        pStartMin,
+        pEndMin,
+      };
+    });
+  }, [effectiveDate, existingBookings, startTime, endTime]);
+
+  // Click handler for timing box: user can tap and untap slots to pick and unpick
+  const handleBoxClick = (clickedStartTime: string, clickedEndTime: string) => {
+    // If no slot is selected, picking this slot selects ONLY this single 30-min slot
+    if (!startTime || !endTime) {
+      setStartTime(clickedStartTime);
+      setEndTime(clickedEndTime);
+      return;
+    }
+
+    const [curSH, curSM] = startTime.split(':').map(Number);
+    const [curEH, curEM] = endTime.split(':').map(Number);
+    const curStartMin = curSH * 60 + curSM;
+    const curEndMin = curEH * 60 + curEM;
+
+    const [clkSH, clkSM] = clickedStartTime.split(':').map(Number);
+    const [clkEH, clkEM] = clickedEndTime.split(':').map(Number);
+    const clkStartMin = clkSH * 60 + clkSM;
+    const clkEndMin = clkEH * 60 + clkEM;
+
+    // Check if the clicked slot is inside the current selected range
+    const isInsideSelection = clkStartMin >= curStartMin && clkEndMin <= curEndMin;
+
+    if (isInsideSelection) {
+      // --- UNPICK / UNTAP LOGIC ---
+      // Check if this is the only slot currently selected (30 mins)
+      if (curEndMin - curStartMin <= 30) {
+        // Untap the single selected slot -> clears selection completely
+        setStartTime('');
+        setEndTime('');
+        return;
+      }
+
+      // Multiple slots currently selected:
+      if (clkStartMin === curStartMin) {
+        // Untap the earliest slot -> shrink start time forward
+        setStartTime(clickedEndTime);
+        return;
+      }
+
+      if (clkEndMin === curEndMin) {
+        // Untap the latest slot -> shrink end time backward
+        setEndTime(clickedStartTime);
+        return;
+      }
+
+      // Untapping a middle slot: trim the range so it ends at this slot (leaving the earlier portion)
+      setEndTime(clickedStartTime);
+      return;
+    }
+
+    // --- PICK / EXTEND LOGIC ---
+    // Check if clicked slot is immediately adjacent to the current selection:
+    if (clickedStartTime === endTime) {
+      // Immediately adjacent at the end: extend range forward!
+      setEndTime(clickedEndTime);
+      return;
+    }
+
+    if (clickedEndTime === startTime) {
+      // Immediately adjacent at the start: extend range backward!
+      setStartTime(clickedStartTime);
+      return;
+    }
+
+    // Non-adjacent slot clicked: switch selection cleanly to ONLY this newly clicked slot!
+    // (Prevents automatically picking more slots than clicked)
+    setStartTime(clickedStartTime);
+    setEndTime(clickedEndTime);
   };
 
   // Day of the week for chosen date
@@ -203,6 +375,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     e.preventDefault();
     setFormError('');
 
+    const finalPurpose = selectedPurpose === '__custom__' ? customPurpose.trim() : selectedPurpose.trim();
+
     if (teachersList.length === 0) {
       setFormError('No teachers available. Please add teachers in the Admin Portal first.');
       return;
@@ -211,8 +385,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       setFormError('No classes available. Please add classes in the Admin Portal first.');
       return;
     }
-    if (!title.trim()) {
-      setFormError('Please enter a lesson topic or purpose.');
+    if (!finalPurpose) {
+      setFormError('Please select or specify an activity purpose.');
       return;
     }
     if (!teacherName) {
@@ -223,8 +397,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       setFormError('Please select a class.');
       return;
     }
-    if (startTime >= endTime) {
-      setFormError('End time must be after start time.');
+    if (!startTime || !endTime || startTime >= endTime) {
+      setFormError('Please click an available time slot box to choose your booking time.');
       return;
     }
     if (!isPrebooking && date !== todayStr) {
@@ -242,7 +416,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     setIsSubmitting(true);
     try {
       const bookingData: Partial<Booking> = {
-        title: title.trim(),
+        title: finalPurpose,
         teacherName,
         date,
         startTime,
@@ -267,9 +441,9 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-stone-900/60 backdrop-blur-2xs overflow-y-auto font-sans">
-      <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-stone-200 my-6 animate-in fade-in zoom-in duration-150 max-h-[92vh] flex flex-col">
+      <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-xl border border-stone-200 my-6 animate-in fade-in zoom-in duration-150 max-h-[92vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between pb-3.5 border-b border-stone-100">
+        <div className="flex items-center justify-between pb-3.5 border-b border-stone-100 shrink-0">
           <div className="flex items-center gap-3">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
               isPrebooking ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
@@ -341,7 +515,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             </div>
           )}
 
-          {/* Date & Time Range Pickers */}
+          {/* Date & Interactive Timing Boxes (Without Duration or Start/End Time Dropdowns) */}
           <div className="bg-stone-50 p-3.5 rounded-xl border border-stone-200 space-y-3">
             <div>
               <div className="flex items-center justify-between mb-1">
@@ -374,54 +548,139 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block font-semibold text-stone-700 mb-1 flex items-center gap-1">
-                  <Clock className="w-3.5 h-3.5 text-rose-600" />
-                  Start Time:
+            {/* Interactive Timetable Boxes Grid */}
+            <div className="pt-2 border-t border-stone-200/80 space-y-2.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                <label className="font-bold text-stone-800 text-xs flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-rose-700" />
+                  <span>Timings &amp; Availability for {effectiveDate}:</span>
                 </label>
-                <select
-                  value={startTime}
-                  onChange={e => {
-                    const newStart = e.target.value;
-                    setStartTime(newStart);
-                    if (newStart >= endTime) {
-                      const [h, m] = newStart.split(':').map(Number);
-                      const nextH = Math.min(h + 1, 17);
-                      setEndTime(`${nextH.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
-                    }
-                  }}
-                  className="w-full text-xs p-2.5 rounded-xl border border-stone-300 bg-white font-medium focus:ring-2 focus:ring-rose-400"
-                >
-                  {TIME_OPTIONS.slice(0, -1).map(t => (
-                    <option key={t} value={t}>
-                      {formatTime12h(t)}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-2 text-[10px] text-stone-500 font-medium">
+                  <span className="flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded bg-emerald-500 inline-block"></span>
+                    <span>Available</span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded bg-rose-500 inline-block"></span>
+                    <span>Taken</span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded bg-rose-900 inline-block"></span>
+                    <span>Selected</span>
+                  </span>
+                </div>
               </div>
 
-              <div>
-                <label className="block font-semibold text-stone-700 mb-1 flex items-center gap-1">
-                  <Clock className="w-3.5 h-3.5 text-rose-600" />
-                  End Time:
-                </label>
-                <select
-                  value={endTime}
-                  onChange={e => setEndTime(e.target.value)}
-                  className="w-full text-xs p-2.5 rounded-xl border border-stone-300 bg-white font-medium focus:ring-2 focus:ring-rose-400"
-                >
-                  {TIME_OPTIONS.filter(t => t > startTime).map(t => (
-                    <option key={t} value={t}>
-                      {formatTime12h(t)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
+              {/* Selected Time Indicator Banner */}
+              {startTime && endTime ? (
+                <div className="p-2.5 rounded-xl bg-white border border-stone-200 shadow-2xs flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-xs font-semibold text-stone-700">
+                      Selected Time: <strong className="text-stone-900">{formatTime12h(startTime)} – {formatTime12h(endTime)}</strong> ({durationHours} {durationHours === 1 ? 'hour' : 'hours'})
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStartTime('');
+                        setEndTime('');
+                      }}
+                      className="text-[11px] font-bold text-rose-700 hover:text-rose-900 px-2 py-0.5 rounded-md hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors"
+                      title="Clear slot selection"
+                    >
+                      ✕ Unpick All
+                    </button>
+                    <span className="text-[10px] font-medium text-stone-500 hidden sm:inline">
+                      Tap a picked slot to unpick
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 text-xs flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span className="font-medium">
+                      No time slot selected yet. <strong>Tap any available 30-minute box below</strong> to pick your session.
+                    </span>
+                  </div>
+                </div>
+              )}
 
-            <div className="text-[11px] text-stone-500 font-medium text-right">
-              Duration: <span className="font-bold text-stone-800">{durationHours} {durationHours === 1 ? 'hour' : 'hours'}</span>
+              {/* Timetable Boxes Grid in 30-min intervals (Part of the main scrollable page) */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-2 bg-stone-100/70 rounded-xl border border-stone-200">
+                {daySlotAvailability.map(({ period, isBooked, booking, isSelected, isAdjacent }) => {
+                  if (isBooked && booking) {
+                    return (
+                      <div
+                        key={period.startTime}
+                        className="p-2.5 rounded-xl border border-rose-300 bg-rose-50/90 text-rose-950 text-left select-none relative shadow-2xs opacity-90 cursor-not-allowed flex flex-col justify-between min-h-[76px]"
+                        title={`Taken by ${booking.teacherName} for ${booking.className}: ${booking.title}`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] font-bold leading-none mb-1">
+                            <span className="font-mono">{period.timeLabel}</span>
+                            <span className="text-[9px] font-bold text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded border border-rose-300">
+                              Taken
+                            </span>
+                          </div>
+                          <div className="text-[11px] font-bold text-stone-900 truncate">
+                            {booking.className}
+                          </div>
+                          <div className="text-[10px] text-rose-800 font-semibold truncate mt-0.5">
+                            👤 {booking.teacherName}
+                          </div>
+                        </div>
+                        <div className="text-[9px] text-stone-600 truncate mt-1 italic">
+                          {booking.title}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <button
+                      key={period.startTime}
+                      type="button"
+                      onClick={() => handleBoxClick(period.startTime, period.endTime)}
+                      className={`p-2.5 rounded-xl border text-left transition-all relative flex flex-col justify-between min-h-[76px] ${
+                        isSelected
+                          ? 'bg-rose-900 text-white border-rose-950 shadow-md ring-2 ring-rose-400'
+                          : isAdjacent
+                          ? 'bg-emerald-50 text-stone-800 border-emerald-400 hover:bg-emerald-100 shadow-2xs'
+                          : 'bg-white text-stone-800 border-stone-300 hover:border-emerald-500 hover:bg-emerald-50/70 shadow-2xs hover:shadow-xs'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between text-[11px] font-bold leading-none mb-1">
+                          <span className="font-mono">{period.timeLabel}</span>
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                            isSelected 
+                              ? 'bg-white/20 text-white' 
+                              : isAdjacent
+                              ? 'bg-emerald-200 text-emerald-950 border border-emerald-300'
+                              : period.isRehat 
+                              ? 'bg-amber-100 text-amber-900 border border-amber-300' 
+                              : 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                          }`}>
+                            {isSelected ? '✓ Picked' : isAdjacent ? '+ Extend' : period.isRehat ? 'Rehat' : 'Free'}
+                          </span>
+                        </div>
+                        <div className={`text-[11px] font-bold truncate ${isSelected ? 'text-white' : 'text-stone-900'}`}>
+                          {period.isRehat ? 'Recess / Rehat' : `Period ${period.periodNumber || ''}`}
+                        </div>
+                      </div>
+                      <div className={`text-[10px] font-semibold mt-1 flex items-center justify-between ${
+                        isSelected ? 'text-rose-100' : isAdjacent ? 'text-emerald-800 font-bold' : 'text-emerald-700'
+                      }`}>
+                        <span>{isSelected ? 'Tap to unpick' : isAdjacent ? '+ Tap to extend' : 'Tap to pick'}</span>
+                        {isSelected && <span className="text-[10px] text-white/80">✕</span>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -561,19 +820,34 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             </div>
           )}
 
-          {/* Topic / Activity */}
+          {/* Activity Purpose Dropdown (Editable via Admin Page) */}
           <div>
-            <label className="block font-semibold text-stone-700 mb-1">
-              Lesson Topic / Activity Purpose *
+            <label className="block font-semibold text-stone-700 mb-1 flex items-center gap-1">
+              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+              <span>Activity Purpose *</span>
             </label>
-            <input
-              type="text"
+            <select
+              value={selectedPurpose}
+              onChange={e => setSelectedPurpose(e.target.value)}
               required
-              placeholder="e.g., SPM Speaking Practice, Listening Paper Mock, Choral Speaking Rehearsal"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              className="w-full text-xs p-2.5 rounded-xl border border-stone-300 focus:ring-2 focus:ring-rose-400"
-            />
+              className="w-full text-xs p-2.5 rounded-xl border border-stone-300 bg-white font-medium focus:ring-2 focus:ring-rose-400"
+            >
+              {availablePurposes.map(p => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+              <option value="__custom__">+ Other / Custom Purpose...</option>
+            </select>
+
+            {selectedPurpose === '__custom__' && (
+              <input
+                type="text"
+                required
+                placeholder="Type custom activity purpose..."
+                value={customPurpose}
+                onChange={e => setCustomPurpose(e.target.value)}
+                className="mt-2 w-full text-xs p-2.5 rounded-xl border border-stone-300 bg-white font-medium focus:ring-2 focus:ring-rose-400"
+              />
+            )}
           </div>
 
           {/* Pre-Booking note if enabled */}
@@ -595,85 +869,84 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             </div>
           )}
 
-          {/* Teacher Notes */}
+          {/* Notes */}
           <div>
             <label className="block font-semibold text-stone-700 mb-1">
-              Remarks (Optional)
+              Additional Notes / Lab Requirements (Optional):
             </label>
-            <input
-              type="text"
-              placeholder="Any special notes or preparation..."
+            <textarea
+              rows={2}
+              placeholder="e.g., Need 30 headsets and projector switched on before 8:00 AM"
               value={notes}
               onChange={e => setNotes(e.target.value)}
-              className="w-full text-xs p-2 rounded-xl border border-stone-300 focus:ring-2 focus:ring-rose-400"
+              className="w-full text-xs p-2.5 rounded-xl border border-stone-300 focus:ring-2 focus:ring-rose-400"
             />
           </div>
 
-          {/* Telegram Notification Toggle in Pastel */}
-          <div className="p-3 rounded-xl bg-sky-50/80 border border-sky-200 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <Send className="w-4 h-4 text-sky-700" />
-              <div>
-                <span className="font-bold text-sky-950 block">
-                  Notify Telegram Group
-                </span>
-                <span className="text-[11px] text-sky-700">
-                  Broadcast to {telegramConfig.groupTitle || 'SAKURA Teachers'}
-                </span>
+          {/* Telegram Notification Toggle */}
+          {telegramConfig.enabled && (
+            <div className="p-3 rounded-xl bg-sky-50 border border-sky-200 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Send className="w-4 h-4 text-sky-600 shrink-0" />
+                <div>
+                  <div className="font-semibold text-xs text-sky-950">
+                    Telegram Notification
+                  </div>
+                  <div className="text-[10px] text-sky-700 flex flex-wrap items-center gap-1">
+                    <span>Dispatch instant booking alert to <strong>{telegramConfig.groupTitle || 'Teachers Group'}</strong></span>
+                    {telegramConfig.threadId && (
+                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-200/70 text-sky-900 border border-sky-300">
+                        Topic #{telegramConfig.threadId}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={notifyTelegram}
+                  onChange={e => setNotifyTelegram(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-stone-300 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-600"></div>
+              </label>
             </div>
+          )}
 
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                checked={notifyTelegram}
-                onChange={e => setNotifyTelegram(e.target.checked)}
-                className="sr-only peer"
-              />
-              <div className="w-9 h-5 bg-stone-300 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
-            </label>
+          {/* Submit Buttons */}
+          <div className="pt-3 border-t border-stone-100 flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-xs font-semibold text-stone-600 hover:text-stone-800 hover:bg-stone-100 rounded-xl transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className={`px-5 py-2 text-xs font-bold text-white rounded-xl shadow-xs transition-all flex items-center gap-1.5 ${
+                isPrebooking 
+                  ? 'bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300' 
+                  : 'bg-rose-900 hover:bg-rose-950 disabled:bg-rose-400'
+              }`}
+            >
+              {isSubmitting ? (
+                <span>Confirming...</span>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>
+                    {isPrebooking 
+                      ? (isRecurring ? `Confirm ${recurringDates.length} Pre-Bookings` : 'Confirm Pre-Booking') 
+                      : 'Confirm Booking'}
+                  </span>
+                </>
+              )}
+            </button>
           </div>
         </form>
-
-        {/* Footer */}
-        <div className="pt-3 border-t border-stone-100 flex items-center justify-end gap-2.5">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isSubmitting}
-            className="px-4 py-2 text-xs font-semibold text-stone-600 hover:text-stone-800 rounded-xl hover:bg-stone-100 transition-colors"
-          >
-            Cancel
-          </button>
-
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={isSubmitting || recurringConflicts.length > 0 || teachersList.length === 0 || classesList.length === 0}
-            className={`px-5 py-2 text-xs font-semibold rounded-xl shadow-2xs transition-all flex items-center gap-1.5 ${
-              recurringConflicts.length > 0 || teachersList.length === 0 || classesList.length === 0
-                ? 'bg-stone-300 text-stone-500 cursor-not-allowed'
-                : isPrebooking
-                ? 'bg-amber-200 text-amber-950 hover:bg-amber-300'
-                : 'bg-rose-200/90 text-rose-950 hover:bg-rose-200 border border-rose-300'
-            }`}
-          >
-            {isSubmitting ? (
-              <span>Saving...</span>
-            ) : (
-              <>
-                <Send className="w-3.5 h-3.5" />
-                <span>
-                  {isPrebooking 
-                    ? isRecurring 
-                      ? `Pre-Book ${recurringDates.length} Weekly Sessions` 
-                      : 'Pre-Book & Send Alert' 
-                    : 'Confirm Booking (Today)'}
-                </span>
-              </>
-            )}
-          </button>
-        </div>
       </div>
     </div>
   );

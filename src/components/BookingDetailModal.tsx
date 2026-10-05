@@ -174,7 +174,9 @@ export const BookingDetailModal: React.FC<BookingDetailModalProps> = ({
               <div>
                 <span className="font-bold text-sky-950 block">Telegram Notification</span>
                 <span className="text-[11px] text-sky-700">
-                  {booking.telegramNotified ? 'Dispatched to group' : 'Not yet dispatched'}
+                  {booking.telegramNotified 
+                    ? (telegramConfig.threadId ? `Dispatched to group (Topic #${telegramConfig.threadId})` : 'Dispatched to group') 
+                    : 'Not yet dispatched'}
                 </span>
               </div>
             </div>

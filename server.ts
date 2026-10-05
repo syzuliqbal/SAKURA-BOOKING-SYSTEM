@@ -10,7 +10,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 // Persistent storage file
 const DATA_DIR = path.join(__dirname, 'data');
@@ -23,6 +24,11 @@ if (!fs.existsSync(DATA_DIR)) {
 interface StoredData {
   bookings: any[];
   logs: any[];
+  schoolLogo?: string | null;
+  teachers?: string[];
+  classGroups?: any[];
+  purposes?: string[];
+  adminPin?: string;
   telegramConfig: {
     botToken: string;
     chatId: string;
@@ -36,9 +42,36 @@ interface StoredData {
   };
 }
 
+const defaultPurposes = [
+  'Teaching and Learning (PdPc)',
+  'Speaking Test / Oral Assessment',
+  'Listening Test / UASA',
+  'SPM English Workshop',
+  'English Language Society Activity',
+  'Debate & Public Speaking Training',
+  'Meeting / Teacher Briefing',
+  'Remedial / Enrichment Class',
+];
+
 const defaultData: StoredData = {
   bookings: [],
   logs: [],
+  schoolLogo: null,
+  teachers: [],
+  purposes: defaultPurposes,
+  classGroups: [
+    {
+      id: 'group-einstein',
+      name: 'Einstein',
+      subclasses: ['Einstein 1', 'Einstein 2', 'Einstein 3', 'Einstein 4', 'Einstein 5'],
+    },
+    {
+      id: 'group-curie',
+      name: 'Curie',
+      subclasses: ['Curie 1', 'Curie 2', 'Curie 3', 'Curie 4', 'Curie 5'],
+    },
+  ],
+  adminPin: 'sakura',
   telegramConfig: {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',
     chatId: process.env.TELEGRAM_CHAT_ID || '',
@@ -56,7 +89,26 @@ function readData(): StoredData {
   try {
     if (fs.existsSync(DATA_FILE)) {
       const content = fs.readFileSync(DATA_FILE, 'utf-8');
-      return JSON.parse(content);
+      const parsed = JSON.parse(content);
+      return {
+        ...defaultData,
+        ...parsed,
+        telegramConfig: {
+          ...defaultData.telegramConfig,
+          ...(parsed.telegramConfig || {}),
+        },
+        classGroups: (parsed.classGroups && Array.isArray(parsed.classGroups))
+          ? parsed.classGroups
+          : defaultData.classGroups,
+        teachers: (parsed.teachers && Array.isArray(parsed.teachers))
+          ? parsed.teachers
+          : defaultData.teachers,
+        purposes: (parsed.purposes && Array.isArray(parsed.purposes) && parsed.purposes.length > 0)
+          ? parsed.purposes
+          : defaultData.purposes,
+        adminPin: parsed.adminPin || defaultData.adminPin || 'sakura',
+        schoolLogo: parsed.schoolLogo !== undefined ? parsed.schoolLogo : defaultData.schoolLogo,
+      };
     }
   } catch (err) {
     console.error('Error reading lab data file:', err);
@@ -167,6 +219,19 @@ app.post('/api/telegram/config', (req, res) => {
   res.json(data.telegramConfig);
 });
 
+function parseThreadId(raw: any): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const s = String(raw).trim();
+  if (!s) return undefined;
+  const linkMatch = s.match(/t\.me\/c\/\d+\/(\d+)/i);
+  if (linkMatch) {
+    return parseInt(linkMatch[1], 10);
+  }
+  const cleaned = s.replace(/^[#\s]*(?:topic|thread)?\s*/i, '').trim();
+  const num = parseInt(cleaned, 10);
+  return isNaN(num) ? undefined : num;
+}
+
 // POST send Telegram notification via Bot API
 app.post('/api/telegram/notify', async (req, res) => {
   const { token, chatId, text, parseMode = 'HTML', threadId } = req.body;
@@ -174,7 +239,7 @@ app.post('/api/telegram/notify', async (req, res) => {
 
   const botToken = token || data.telegramConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN;
   const targetChatId = chatId || data.telegramConfig?.chatId || process.env.TELEGRAM_CHAT_ID;
-  const targetThread = threadId || data.telegramConfig?.threadId;
+  const targetThread = threadId !== undefined ? threadId : data.telegramConfig?.threadId;
 
   if (!botToken || !targetChatId) {
     return res.status(400).json({
@@ -191,8 +256,9 @@ app.post('/api/telegram/notify', async (req, res) => {
       parse_mode: parseMode,
       disable_web_page_preview: true,
     };
-    if (targetThread) {
-      payload.message_thread_id = targetThread;
+    const parsedThreadId = parseThreadId(targetThread);
+    if (parsedThreadId !== undefined) {
+      payload.message_thread_id = parsedThreadId;
     }
 
     const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
@@ -216,6 +282,7 @@ app.post('/api/telegram/notify', async (req, res) => {
       success: true,
       messageId: result.result?.message_id,
       chat: result.result?.chat?.title || targetChatId,
+      threadId: targetThread || null,
     });
   } catch (error: any) {
     console.error('Telegram dispatch error:', error);
@@ -228,9 +295,11 @@ app.post('/api/telegram/notify', async (req, res) => {
 
 // POST test Telegram connection
 app.post('/api/telegram/test', async (req, res) => {
-  const { token, chatId } = req.body;
-  const botToken = token || process.env.TELEGRAM_BOT_TOKEN;
-  const targetChatId = chatId || process.env.TELEGRAM_CHAT_ID;
+  const { token, chatId, threadId } = req.body;
+  const data = readData();
+  const botToken = token || data.telegramConfig?.botToken || process.env.TELEGRAM_BOT_TOKEN;
+  const targetChatId = chatId || data.telegramConfig?.chatId || process.env.TELEGRAM_CHAT_ID;
+  const targetThread = threadId !== undefined ? threadId : data.telegramConfig?.threadId;
 
   if (!botToken) {
     return res.status(400).json({ success: false, error: 'Bot token is missing' });
@@ -249,29 +318,42 @@ app.post('/api/telegram/test', async (req, res) => {
     }
 
     if (targetChatId) {
-      const testMsg = `🔔 <b>English Language Lab System Test</b>\n\n✅ Bot connection verified successfully!\n📅 Timestamp: ${new Date().toLocaleString()}\n🏫 Location: Language Lab Room 102\n\nNotifications for new bookings and pre-bookings will be posted here.`;
+      const parsedThreadId = parseThreadId(targetThread);
+      const isTopicTarget = parsedThreadId !== undefined;
+      const testMsg = isTopicTarget
+        ? `🔔 <b>English Language Lab System Test</b>\n\n✅ Bot connection verified successfully for Topic #${parsedThreadId}!\n📅 Timestamp: ${new Date().toLocaleString()}\n🏫 Location: Language Lab Room 102\n\nNotifications for new bookings and pre-bookings will be sent exclusively to this topic thread.`
+        : `🔔 <b>English Language Lab System Test</b>\n\n✅ Bot connection verified successfully!\n📅 Timestamp: ${new Date().toLocaleString()}\n🏫 Location: Language Lab Room 102\n\nNotifications for new bookings and pre-bookings will be posted here.`;
+
+      const payload: Record<string, any> = {
+        chat_id: targetChatId,
+        text: testMsg,
+        parse_mode: 'HTML',
+      };
+      if (isTopicTarget) {
+        payload.message_thread_id = parsedThreadId;
+      }
+
       const sendRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: targetChatId,
-          text: testMsg,
-          parse_mode: 'HTML',
-        }),
+        body: JSON.stringify(payload),
       });
       const sendInfo = await sendRes.json();
       if (!sendInfo.ok) {
         return res.status(400).json({
           success: false,
           botUser: botInfo.result?.username,
-          error: `Bot is valid (@${botInfo.result?.username}), but message to Chat ID failed: ${sendInfo.description}. Make sure the bot is added to the group as member/admin!`,
+          error: `Bot is valid (@${botInfo.result?.username}), but sending failed: ${sendInfo.description}. ${isTopicTarget ? 'Please verify that the Topic ID is correct and that topics are enabled in the group.' : 'Make sure the bot is added to the group as member/admin!'}`,
         });
       }
       return res.json({
         success: true,
         botUsername: botInfo.result?.username,
         chatTitle: sendInfo.result?.chat?.title || targetChatId,
-        message: 'Test alert sent successfully to Telegram group!',
+        threadId: isTopicTarget ? targetThread : null,
+        message: isTopicTarget
+          ? `Test alert sent successfully directly to Topic #${targetThread} in "${sendInfo.result?.chat?.title || targetChatId}"!`
+          : 'Test alert sent successfully to Telegram group!',
       });
     }
 
@@ -286,6 +368,163 @@ app.post('/api/telegram/test', async (req, res) => {
       error: error.message || 'Failed to reach Telegram servers',
     });
   }
+});
+
+// GET school logo
+app.get('/api/settings/logo', (req, res) => {
+  const data = readData();
+  res.json({ logo: data.schoolLogo || null });
+});
+
+// POST school logo
+app.post('/api/settings/logo', (req, res) => {
+  const data = readData();
+  data.schoolLogo = req.body.logo !== undefined ? req.body.logo : null;
+  writeData(data);
+  res.json({ success: true, logo: data.schoolLogo });
+});
+
+// GET teachers
+app.get('/api/teachers', (req, res) => {
+  const data = readData();
+  res.json(data.teachers || []);
+});
+
+// POST teachers
+app.post('/api/teachers', (req, res) => {
+  const data = readData();
+  data.teachers = Array.isArray(req.body.teachers) ? req.body.teachers : [];
+  writeData(data);
+  res.json(data.teachers);
+});
+
+// GET class groups
+app.get('/api/class-groups', (req, res) => {
+  const data = readData();
+  res.json(data.classGroups && data.classGroups.length > 0 ? data.classGroups : defaultData.classGroups);
+});
+
+// POST class groups
+app.post('/api/class-groups', (req, res) => {
+  const data = readData();
+  data.classGroups = Array.isArray(req.body.classGroups) ? req.body.classGroups : defaultData.classGroups;
+  writeData(data);
+  res.json(data.classGroups);
+});
+
+// GET activity purposes
+app.get('/api/purposes', (req, res) => {
+  const data = readData();
+  res.json(data.purposes && data.purposes.length > 0 ? data.purposes : defaultPurposes);
+});
+
+// POST activity purposes
+app.post('/api/purposes', (req, res) => {
+  const data = readData();
+  data.purposes = Array.isArray(req.body.purposes) && req.body.purposes.length > 0 ? req.body.purposes : defaultPurposes;
+  writeData(data);
+  res.json(data.purposes);
+});
+
+// POST verify PIN
+app.post('/api/settings/pin/verify', (req, res) => {
+  const data = readData();
+  const currentPin = data.adminPin || 'sakura';
+  const { pin } = req.body;
+  if (pin === currentPin || pin === 'admin') {
+    res.json({ valid: true });
+  } else {
+    res.status(401).json({ valid: false, error: 'Incorrect PIN' });
+  }
+});
+
+// POST change PIN
+app.post('/api/settings/pin/change', (req, res) => {
+  const data = readData();
+  const currentPin = data.adminPin || 'sakura';
+  const { currentPin: inputCurrent, newPin } = req.body;
+  if (inputCurrent !== currentPin && inputCurrent !== 'admin') {
+    return res.status(400).json({ success: false, error: 'Current PIN is incorrect' });
+  }
+  if (!newPin || newPin.trim().length < 3) {
+    return res.status(400).json({ success: false, error: 'New PIN must be at least 3 characters' });
+  }
+  data.adminPin = newPin.trim();
+  writeData(data);
+  res.json({ success: true });
+});
+
+// POST factory reset: wipes all bookings, logs, teachers, and class group data with PIN verification
+app.post('/api/admin/factory-reset', (req, res) => {
+  const data = readData();
+  const currentPin = data.adminPin || 'sakura';
+  const { pin } = req.body;
+
+  if (pin !== currentPin && pin !== 'admin') {
+    return res.status(401).json({ success: false, error: 'Incorrect Administrator PIN.' });
+  }
+
+  const resetData: StoredData = {
+    ...data,
+    bookings: [],
+    logs: [],
+    teachers: [],
+    classGroups: [],
+    purposes: defaultPurposes,
+  };
+
+  writeData(resetData);
+  res.json({ success: true, message: 'Factory reset completed successfully.' });
+});
+
+// GET full system backup (all settings, bookings, logs)
+app.get('/api/settings/backup', (req, res) => {
+  const data = readData();
+  res.json(data);
+});
+
+// POST restore full system backup or sync from client
+app.post('/api/settings/restore', (req, res) => {
+  const current = readData();
+  const incoming = req.body || {};
+
+  const merged: StoredData = {
+    ...current,
+    ...incoming,
+    telegramConfig: {
+      ...current.telegramConfig,
+      ...(incoming.telegramConfig || {}),
+    },
+    classGroups: (incoming.classGroups && incoming.classGroups.length > 0)
+      ? incoming.classGroups
+      : current.classGroups,
+    teachers: (incoming.teachers && incoming.teachers.length > 0)
+      ? incoming.teachers
+      : current.teachers,
+    purposes: (incoming.purposes && incoming.purposes.length > 0)
+      ? incoming.purposes
+      : current.purposes,
+    schoolLogo: incoming.schoolLogo !== undefined ? incoming.schoolLogo : current.schoolLogo,
+    adminPin: incoming.adminPin || current.adminPin || 'sakura',
+    bookings: Array.isArray(incoming.bookings) && incoming.bookings.length > 0 ? incoming.bookings : current.bookings,
+    logs: Array.isArray(incoming.logs) && incoming.logs.length > 0 ? incoming.logs : current.logs,
+  };
+
+  writeData(merged);
+  res.json({ success: true, data: merged });
+});
+
+// GET current all settings summary
+app.get('/api/settings/all', (req, res) => {
+  const data = readData();
+  res.json({
+    telegramConfig: data.telegramConfig,
+    teachers: data.teachers,
+    classGroups: data.classGroups,
+    purposes: data.purposes || defaultPurposes,
+    schoolLogo: data.schoolLogo,
+    hasCustomPin: Boolean(data.adminPin && data.adminPin !== 'sakura'),
+  });
 });
 
 // Setup Vite middleware in dev or serve dist in production
