@@ -1,0 +1,15 @@
+{
+  "bookings": [],
+  "logs": [],
+  "telegramConfig": {
+    "botToken": "",
+    "chatId": "",
+    "threadId": "",
+    "groupTitle": "SAKURA Teachers",
+    "enabled": false,
+    "notifyOnPrebooking": true,
+    "notifyOnInstantBooking": true,
+    "notifyOnApproval": true,
+    "notifyOnCancellation": true
+  }
+}
