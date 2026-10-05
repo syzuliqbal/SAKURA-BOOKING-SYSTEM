@@ -43,6 +43,13 @@ interface AdminPortalProps {
   onCancelBooking: (bookingId: string) => Promise<void>;
 }
 
+interface ConfirmDialogState {
+  title: string;
+  message: string;
+  confirmText?: string;
+  onConfirm: () => void;
+}
+
 export const AdminPortal: React.FC<AdminPortalProps> = ({
   isAuthenticated,
   onAuthenticate,
@@ -63,6 +70,17 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
   const [activeAdminSubTab, setActiveAdminSubTab] = useState<'teachers' | 'classes' | 'telegram' | 'logo' | 'records' | 'security'>('teachers');
+
+  // Confirmation modal dialog (replaces blocked window.confirm in iframe)
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
+
+  // In-UI notification banner (replaces blocked alert() in iframe)
+  const [actionNotice, setActionNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const showNotice = (message: string, type: 'success' | 'error' = 'success') => {
+    setActionNotice({ type, message });
+    setTimeout(() => setActionNotice(null), 4500);
+  };
 
   // New Teacher inputs
   const [newTeacherName, setNewTeacherName] = useState('');
@@ -154,25 +172,33 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     });
 
     if (newNamesToAdd.length === 0) {
-      alert('All entered teacher names already exist in the list.');
+      showNotice('All entered teacher names already exist in the list.', 'error');
       return;
     }
 
     const updated = [...teachersList, ...newNamesToAdd].sort();
     onSaveTeachersList(updated);
     setNewTeacherName('');
+    showNotice(`Added ${newNamesToAdd.length} teacher(s) to the list.`, 'success');
   };
 
-  // Delete Teacher
+  // Delete Teacher (Trigger in-UI confirmation)
   const handleDeleteTeacher = (name: string) => {
     if (teachersList.length <= 1) {
-      alert('At least one teacher is required.');
+      showNotice('At least one teacher is required.', 'error');
       return;
     }
-    if (window.confirm(`Remove ${name} from teachers list?`)) {
-      const updated = teachersList.filter(t => t !== name);
-      onSaveTeachersList(updated);
-    }
+
+    setConfirmDialog({
+      title: 'Remove Teacher',
+      message: `Are you sure you want to remove "${name}" from the teachers list?`,
+      confirmText: 'Remove Teacher',
+      onConfirm: () => {
+        const updated = teachersList.filter(t => t !== name);
+        onSaveTeachersList(updated);
+        showNotice(`Removed ${name} from teachers list.`, 'success');
+      }
+    });
   };
 
   // CLASS GROUPS MANAGEMENT
@@ -184,7 +210,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     if (!gName) return;
 
     if (classGroups.some(g => g.name.toLowerCase() === gName.toLowerCase())) {
-      alert(`Class group "${gName}" already exists.`);
+      showNotice(`Class group "${gName}" already exists.`, 'error');
       return;
     }
 
@@ -207,18 +233,26 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     onSaveClassGroups(updated);
     setNewGroupName('');
     setNewGroupClasses('');
+    showNotice(`Created class group "${gName}" with ${initialSub.length} classes.`, 'success');
   };
 
-  // Delete a Class Group
+  // Delete a Class Group (Trigger in-UI confirmation)
   const handleDeleteGroup = (groupId: string, groupName: string) => {
     if (classGroups.length <= 1) {
-      alert('At least one class group is required.');
+      showNotice('At least one class group is required.', 'error');
       return;
     }
-    if (window.confirm(`Delete the entire "${groupName}" group and its classes?`)) {
-      const updated = classGroups.filter(g => g.id !== groupId);
-      onSaveClassGroups(updated);
-    }
+
+    setConfirmDialog({
+      title: 'Delete Class Group',
+      message: `Are you sure you want to delete the entire "${groupName}" group and all its classes?`,
+      confirmText: 'Delete Group',
+      onConfirm: () => {
+        const updated = classGroups.filter(g => g.id !== groupId);
+        onSaveClassGroups(updated);
+        showNotice(`Deleted group "${groupName}".`, 'success');
+      }
+    });
   };
 
   // Generate 1 to 5 for a group
@@ -232,6 +266,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
 
     const updated = classGroups.map(g => g.id === groupId ? { ...g, subclasses: merged } : g);
     onSaveClassGroups(updated);
+    showNotice(`Generated ${baseName} 1 through 5.`, 'success');
   };
 
   // Add classes to an existing group
@@ -250,6 +285,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
 
     onSaveClassGroups(updated);
     setAddClsToGroupInputs(prev => ({ ...prev, [groupId]: '' }));
+    showNotice(`Added ${raw.length} class(es).`, 'success');
   };
 
   // Remove a subclass from a group
@@ -258,7 +294,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     if (!grp) return;
 
     if (grp.subclasses.length <= 1) {
-      alert(`Group "${grp.name}" must have at least one class. Or delete the group instead.`);
+      showNotice(`Group "${grp.name}" must have at least one class. You can delete the group instead.`, 'error');
       return;
     }
 
@@ -267,6 +303,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
       return { ...g, subclasses: g.subclasses.filter(c => c !== subclass) };
     });
     onSaveClassGroups(updated);
+    showNotice(`Removed ${subclass} from ${grp.name}.`, 'success');
   };
 
   // Handle Logo Upload
@@ -274,13 +311,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       if (!file.type.startsWith('image/')) {
-        alert('Please select an image file (PNG, JPG).');
+        showNotice('Please select an image file (PNG, JPG).', 'error');
         return;
       }
       const reader = new FileReader();
       reader.onload = (event) => {
         const result = event.target?.result as string;
         onSaveSchoolLogo(result);
+        showNotice('School logo uploaded successfully!', 'success');
       };
       reader.readAsDataURL(file);
     }
@@ -355,7 +393,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     }
 
     if (dataset.length === 0) {
-      alert('No records available to export for the selected filter.');
+      showNotice('No records available to export for the selected filter.', 'error');
       return;
     }
 
@@ -401,6 +439,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
     link.download = `sakura_english_lab_records_${filenameSuffix}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+    showNotice(`Exported ${dataset.length} records to CSV.`, 'success');
   };
 
   // LOCKED VIEW (PIN prompt)
@@ -444,7 +483,68 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
 
   // AUTHENTICATED VIEW
   return (
-    <div className="space-y-6 max-w-5xl font-sans">
+    <div className="space-y-6 max-w-5xl font-sans relative">
+      {/* Action Notice Toast Banner */}
+      {actionNotice && (
+        <div className="fixed top-5 right-5 z-50 animate-in fade-in slide-in-from-top-3 duration-200">
+          <div className={`p-4 rounded-xl shadow-lg border flex items-center gap-2.5 text-xs font-semibold max-w-md ${
+            actionNotice.type === 'success' 
+              ? 'bg-stone-900 text-white border-stone-800' 
+              : 'bg-rose-950 text-rose-100 border-rose-900'
+          }`}>
+            {actionNotice.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            )}
+            <span>{actionNotice.message}</span>
+            <button 
+              type="button" 
+              onClick={() => setActionNotice(null)} 
+              className="ml-auto text-stone-400 hover:text-white"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* In-UI Confirmation Modal Dialog (100% reliable inside iFrames) */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-2xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-stone-200">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-700 flex items-center justify-center border border-rose-200 shrink-0 mt-0.5">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-sm font-bold text-stone-900">{confirmDialog.title}</h3>
+                <p className="text-xs text-stone-600 mt-1 leading-relaxed">{confirmDialog.message}</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-5 pt-3 border-t border-stone-100">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+                className="px-3.5 py-1.5 rounded-xl border border-stone-200 text-xs font-semibold text-stone-600 hover:bg-stone-100 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  confirmDialog.onConfirm();
+                  setConfirmDialog(null);
+                }}
+                className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-xs font-semibold text-white shadow-2xs transition-colors"
+              >
+                {confirmDialog.confirmText || 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Banner */}
       <div className="bg-white rounded-2xl p-5 border border-stone-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -465,6 +565,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         </div>
 
         <button
+          type="button"
           onClick={() => onAuthenticate(false)}
           className="px-3.5 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-semibold rounded-xl border border-stone-200 transition-colors flex items-center gap-1.5 self-start sm:self-auto"
         >
@@ -476,6 +577,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
       {/* Subtab Navigation */}
       <div className="flex flex-wrap gap-2 border-b border-stone-200 pb-2">
         <button
+          type="button"
           onClick={() => setActiveAdminSubTab('teachers')}
           className={`px-3.5 py-2 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 ${
             activeAdminSubTab === 'teachers'
@@ -488,6 +590,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveAdminSubTab('classes')}
           className={`px-3.5 py-2 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 ${
             activeAdminSubTab === 'classes'
@@ -500,6 +603,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveAdminSubTab('records')}
           className={`px-3.5 py-2 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 ${
             activeAdminSubTab === 'records'
@@ -512,6 +616,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveAdminSubTab('telegram')}
           className={`px-3.5 py-2 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 ${
             activeAdminSubTab === 'telegram'
@@ -524,6 +629,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveAdminSubTab('logo')}
           className={`px-3.5 py-2 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 ${
             activeAdminSubTab === 'logo'
@@ -536,6 +642,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveAdminSubTab('security')}
           className={`px-3.5 py-2 text-xs font-semibold rounded-xl transition-all flex items-center gap-1.5 ${
             activeAdminSubTab === 'security'
@@ -600,9 +707,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                 >
                   <span className="font-semibold truncate mr-2">{teacher}</span>
                   <button
+                    type="button"
                     onClick={() => handleDeleteTeacher(teacher)}
-                    className="p-1 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shrink-0"
-                    title="Delete teacher"
+                    className="p-1.5 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shrink-0"
+                    title={`Delete ${teacher}`}
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -703,8 +811,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                     <button
                       type="button"
                       onClick={() => handleDeleteGroup(group.id, group.name)}
-                      className="p-1 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Delete Group"
+                      className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      title={`Delete entire ${group.name} group`}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -720,8 +828,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                     >
                       <span>{cls}</span>
                       <button
+                        type="button"
                         onClick={() => handleRemoveSubclass(group.id, cls)}
-                        className="text-stone-400 hover:text-red-600 p-0.5 rounded-full transition-colors"
+                        className="text-stone-400 hover:text-red-600 p-0.5 rounded-full hover:bg-red-50 transition-colors ml-0.5"
                         title={`Remove ${cls}`}
                       >
                         ✕
@@ -776,6 +885,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
             {/* Export Buttons */}
             <div className="flex flex-wrap items-center gap-2">
               <button
+                type="button"
                 onClick={() => handleExportCSV('filtered')}
                 className="px-3 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-950 font-semibold text-xs rounded-xl border border-emerald-300 transition-colors flex items-center gap-1.5 shadow-2xs"
                 title="Export filtered records"
@@ -785,6 +895,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               </button>
 
               <button
+                type="button"
                 onClick={() => handleExportCSV('year')}
                 className="px-3 py-2 bg-stone-100 hover:bg-stone-200 text-stone-800 font-semibold text-xs rounded-xl border border-stone-300 transition-colors flex items-center gap-1.5"
                 title="Export full selected year"
@@ -849,6 +960,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
 
             {(selectedMonth !== 'all' || selectedYear !== 'all' || selectedStatus !== 'all') && (
               <button
+                type="button"
                 onClick={() => {
                   setSelectedMonth('all');
                   setSelectedYear('all');
@@ -937,12 +1049,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
                       <td className="py-2.5 px-3 text-right whitespace-nowrap">
                         {b.status === 'confirmed' && (
                           <button
+                            type="button"
                             onClick={() => {
-                              if (window.confirm(`Cancel booking for ${b.className} by ${b.teacherName}?`)) {
-                                onCancelBooking(b.id);
-                              }
+                              setConfirmDialog({
+                                title: 'Cancel Booking',
+                                message: `Are you sure you want to cancel the booking for "${b.title}" (${b.className} by ${b.teacherName}) on ${b.date}?`,
+                                confirmText: 'Yes, Cancel Booking',
+                                onConfirm: async () => {
+                                  await onCancelBooking(b.id);
+                                  showNotice(`Booking for ${b.className} cancelled.`, 'success');
+                                }
+                              });
                             }}
-                            className="text-stone-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition-colors"
+                            className="text-stone-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition-colors"
                             title="Cancel booking"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1110,7 +1229,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({
               {schoolLogo && (
                 <div>
                   <button
-                    onClick={() => onSaveSchoolLogo(null)}
+                    type="button"
+                    onClick={() => {
+                      onSaveSchoolLogo(null);
+                      showNotice('Restored default school emblem.', 'success');
+                    }}
                     className="text-xs text-rose-700 hover:text-rose-900 underline font-medium"
                   >
                     Reset to Default SAKURA Emblem

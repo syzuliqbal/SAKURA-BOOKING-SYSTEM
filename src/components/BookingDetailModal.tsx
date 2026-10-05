@@ -34,31 +34,34 @@ export const BookingDetailModal: React.FC<BookingDetailModalProps> = ({
   const [isCancelling, setIsCancelling] = useState(false);
   const [isSendingTelegram, setIsSendingTelegram] = useState(false);
   const [telegramSuccessMessage, setTelegramSuccessMessage] = useState('');
+  const [telegramErrorMessage, setTelegramErrorMessage] = useState('');
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   if (!isOpen || !booking) return null;
 
   const durationHours = calculateDurationHours(booking.startTime, booking.endTime);
 
-  const handleCancel = async () => {
-    if (window.confirm(`Are you sure you want to cancel the booking for "${booking.title}"? A cancellation alert will be posted to the Telegram group.`)) {
-      setIsCancelling(true);
-      try {
-        await onCancelBooking(booking.id);
-        onClose();
-      } finally {
-        setIsCancelling(false);
-      }
+  const handleExecuteCancel = async () => {
+    setIsCancelling(true);
+    try {
+      await onCancelBooking(booking.id);
+      onClose();
+    } finally {
+      setIsCancelling(false);
+      setShowCancelConfirm(false);
     }
   };
 
   const handleResend = async () => {
     setIsSendingTelegram(true);
+    setTelegramErrorMessage('');
     try {
       await onResendTelegram(booking);
       setTelegramSuccessMessage('Telegram alert dispatched!');
       setTimeout(() => setTelegramSuccessMessage(''), 4000);
     } catch (e: any) {
-      alert('Failed to send Telegram alert: ' + e.message);
+      setTelegramErrorMessage('Failed to send Telegram alert: ' + (e.message || 'Network error'));
+      setTimeout(() => setTelegramErrorMessage(''), 5000);
     } finally {
       setIsSendingTelegram(false);
     }
@@ -184,26 +187,64 @@ export const BookingDetailModal: React.FC<BookingDetailModalProps> = ({
               {isSendingTelegram ? 'Sending...' : 'Resend Alert'}
             </button>
           </div>
+
+          {telegramErrorMessage && (
+            <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs">
+              {telegramErrorMessage}
+            </div>
+          )}
+
+          {telegramSuccessMessage && (
+            <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs">
+              {telegramSuccessMessage}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
-        <div className="pt-3 border-t border-stone-100 flex items-center justify-between">
-          <button
-            onClick={handleCancel}
-            disabled={isCancelling}
-            className="text-xs font-semibold text-rose-700 hover:text-rose-900 px-3 py-1.5 rounded-lg hover:bg-rose-50 transition-colors flex items-center gap-1.5"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Cancel Booking</span>
-          </button>
+        {showCancelConfirm ? (
+          <div className="pt-3 border-t border-rose-200 bg-rose-50/50 -mx-6 -mb-6 p-4 rounded-b-2xl space-y-2">
+            <p className="text-xs text-rose-950 font-semibold">
+              Cancel this booking and free the slot on the calendar?
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowCancelConfirm(false)}
+                className="text-xs font-semibold text-stone-600 bg-white border border-stone-200 px-3 py-1.5 rounded-lg hover:bg-stone-50"
+              >
+                Keep Booking
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteCancel}
+                disabled={isCancelling}
+                className="text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 px-3.5 py-1.5 rounded-lg shadow-2xs"
+              >
+                {isCancelling ? 'Cancelling...' : 'Yes, Cancel Booking'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="pt-3 border-t border-stone-100 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setShowCancelConfirm(true)}
+              className="text-xs font-semibold text-rose-700 hover:text-rose-900 px-3 py-1.5 rounded-lg hover:bg-rose-50 transition-colors flex items-center gap-1.5"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Cancel Booking</span>
+            </button>
 
-          <button
-            onClick={onClose}
-            className="text-xs font-semibold bg-stone-800 hover:bg-stone-700 text-white px-4 py-1.5 rounded-lg transition-colors"
-          >
-            Close
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-xs font-semibold bg-stone-800 hover:bg-stone-700 text-white px-4 py-1.5 rounded-lg transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
