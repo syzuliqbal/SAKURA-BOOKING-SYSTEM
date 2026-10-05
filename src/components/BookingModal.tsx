@@ -65,12 +65,15 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   });
   const [customPurpose, setCustomPurpose] = useState('');
 
-  const [teacherName, setTeacherName] = useState(teachersList[0] || '');
+  const [selectedTeacher, setSelectedTeacher] = useState<string>(() => {
+    return teachersList[0] || '__custom__';
+  });
+  const [customTeacher, setCustomTeacher] = useState('');
   const [date, setDate] = useState(() => {
     if (initialIsPrebooking || (initialDate && initialDate > todayStr)) {
       return initialDate || todayStr;
     }
-    return todayStr;
+    return initialDate || todayStr;
   });
   const [startTime, setStartTime] = useState(initialStartTime || '');
   const [endTime, setEndTime] = useState(() => {
@@ -138,7 +141,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
           setDate(initialDate && initialDate > todayStr ? initialDate : tmrw.toISOString().split('T')[0]);
         } else {
           shouldPrebook = false;
-          setDate(todayStr);
+          setDate(initialDate || todayStr);
         }
 
         setIsPrebooking(shouldPrebook);
@@ -156,8 +159,13 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         }
 
         if (teachersList.length > 0) {
-          setTeacherName(prev => prev || teachersList[0]);
+          setSelectedTeacher(prev => prev && (teachersList.includes(prev) || prev === '__custom__') ? prev : teachersList[0]);
+        } else {
+          setSelectedTeacher('__custom__');
         }
+        setCustomTeacher('');
+        setCustomPurpose('');
+        setFormError('');
         if (classGroups.length > 0) {
           const activeGrp = classGroups.find(g => g.id === selectedGroupId) || classGroups[0];
           setSelectedGroupId(activeGrp.id);
@@ -178,11 +186,13 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     onModeChange?.(prebookingMode);
 
     if (!prebookingMode) {
-      // Standard booking is strictly on the day itself
-      setDate(todayStr);
+      // Normal booking allows today or backdated dates. If currently on a future date, reset to today.
+      if (date > todayStr) {
+        setDate(todayStr);
+      }
       setIsRecurring(false);
     } else {
-      // Pre-booking is for future dates: advance to tomorrow if currently today
+      // Pre-booking is for oncoming/future dates: advance to tomorrow if currently today or in the past
       if (date <= todayStr) {
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
@@ -192,7 +202,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   };
 
   // Selected date for checking availability
-  const effectiveDate = isPrebooking ? date : todayStr;
+  const effectiveDate = date;
 
   // Real-time slot availability for effectiveDate
   const daySlotAvailability = useMemo(() => {
@@ -376,9 +386,10 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     setFormError('');
 
     const finalPurpose = selectedPurpose === '__custom__' ? customPurpose.trim() : selectedPurpose.trim();
+    const finalTeacherName = selectedTeacher === '__custom__' ? customTeacher.trim() : selectedTeacher.trim();
 
-    if (teachersList.length === 0) {
-      setFormError('No teachers available. Please add teachers in the Admin Portal first.');
+    if (teachersList.length === 0 && selectedTeacher !== '__custom__') {
+      setFormError('Please select or specify a teacher name.');
       return;
     }
     if (classesList.length === 0) {
@@ -389,8 +400,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       setFormError('Please select or specify an activity purpose.');
       return;
     }
-    if (!teacherName) {
-      setFormError('Please select a teacher.');
+    if (!finalTeacherName) {
+      setFormError('Please select a teacher or write the teacher name manually.');
       return;
     }
     if (!className) {
@@ -401,8 +412,12 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       setFormError('Please click an available time slot box to choose your booking time.');
       return;
     }
-    if (!isPrebooking && date !== todayStr) {
-      setFormError('Standard bookings can only be done on the day itself. For future dates, please use Advance Pre-Booking.');
+    if (!isPrebooking && date > todayStr) {
+      setFormError('Normal bookings can only be done for today or past dates (backdated). For oncoming future dates, please use Advance Pre-Booking.');
+      return;
+    }
+    if (isPrebooking && date < todayStr) {
+      setFormError('Advance Pre-Bookings are for oncoming / future dates. For past dates, please use Normal Booking.');
       return;
     }
     if (recurringConflicts.length > 0) {
@@ -417,7 +432,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     try {
       const bookingData: Partial<Booking> = {
         title: finalPurpose,
-        teacherName,
+        teacherName: finalTeacherName,
         date,
         startTime,
         endTime,
@@ -452,7 +467,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-stone-900">
-                {isPrebooking ? 'Advance Pre-Booking' : 'Standard Lab Booking (Today)'}
+                {isPrebooking ? 'Advance Pre-Booking' : 'Normal Lab Booking (Today / Backdated)'}
               </h3>
               <p className="text-xs text-stone-500">
                 SAKURA English Language Lab Booking System
@@ -487,7 +502,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               }`}
             >
               <Clock className="w-3.5 h-3.5 text-rose-600" />
-              <span>Standard (Today Only)</span>
+              <span>Normal Booking (Today / Backdated)</span>
             </button>
 
             <button
@@ -498,7 +513,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               }`}
             >
               <BookmarkPlus className="w-3.5 h-3.5 text-amber-700" />
-              <span>Advance Pre-Booking</span>
+              <span>Advance Pre-Booking (Future)</span>
             </button>
           </div>
 
@@ -521,29 +536,34 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               <div className="flex items-center justify-between mb-1">
                 <label className="font-semibold text-stone-700 flex items-center gap-1">
                   <Calendar className="w-3.5 h-3.5 text-rose-600" />
-                  Date:
+                  <span>Date:</span>
                 </label>
-                {!isPrebooking && (
-                  <span className="text-[10px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
-                    Day-of Booking Only
+                {!isPrebooking ? (
+                  <span className="text-[10px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                    Today or Backdated Log
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                    Future Dates Only
                   </span>
                 )}
               </div>
               <input
                 type="date"
                 required
-                disabled={!isPrebooking}
-                value={isPrebooking ? date : todayStr}
-                min={isPrebooking ? todayStr : todayStr}
+                value={date}
                 max={!isPrebooking ? todayStr : undefined}
+                min={isPrebooking ? todayStr : undefined}
                 onChange={e => setDate(e.target.value)}
-                className={`w-full text-xs p-2.5 rounded-xl border border-stone-300 font-medium focus:ring-2 focus:ring-rose-400 ${
-                  !isPrebooking ? 'bg-stone-100 text-stone-600 cursor-not-allowed' : 'bg-white'
-                }`}
+                className="w-full text-xs p-2.5 rounded-xl border border-stone-300 bg-white font-medium focus:ring-2 focus:ring-rose-400"
               />
-              {!isPrebooking && (
+              {!isPrebooking ? (
                 <p className="text-[10px] text-stone-500 mt-1">
-                  Standard bookings can only be done on the day itself ({todayStr}). Switch to <strong>Advance Pre-Booking</strong> for future dates.
+                  Normal bookings can be recorded for <strong>today or past dates (backdated)</strong>. For future dates, please switch to <strong>Advance Pre-Booking</strong> above.
+                </p>
+              ) : (
+                <p className="text-[10px] text-stone-500 mt-1">
+                  Advance Pre-Bookings can only be scheduled for <strong>oncoming / future dates</strong>.
                 </p>
               )}
             </div>
@@ -726,26 +746,46 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             </div>
           )}
 
-          {/* Teacher Dropdown */}
+          {/* Teacher Selection (Dropdown with '+ Others' manual entry) */}
           <div>
-            <label className="block font-semibold text-stone-700 mb-1 flex items-center gap-1">
-              <Users className="w-3.5 h-3.5 text-rose-600" />
-              <span>Teacher Name *</span>
-            </label>
-            {teachersList.length > 0 ? (
-              <select
-                value={teacherName}
-                onChange={e => setTeacherName(e.target.value)}
-                required
-                className="w-full text-xs p-2.5 rounded-xl border border-stone-300 bg-white font-medium focus:ring-2 focus:ring-rose-400"
-              >
-                {teachersList.map(t => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            ) : (
-              <div className="text-xs text-rose-700 bg-rose-50 p-2.5 rounded-xl border border-rose-200">
-                No teachers added yet. Please add teachers in the Admin Portal.
+            <div className="flex items-center justify-between mb-1">
+              <label className="font-semibold text-stone-700 flex items-center gap-1">
+                <Users className="w-3.5 h-3.5 text-rose-600" />
+                <span>Teacher Name *</span>
+              </label>
+              {selectedTeacher === '__custom__' && (
+                <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                  Manual Entry
+                </span>
+              )}
+            </div>
+
+            <select
+              value={selectedTeacher}
+              onChange={e => setSelectedTeacher(e.target.value)}
+              required
+              className="w-full text-xs p-2.5 rounded-xl border border-stone-300 bg-white font-medium focus:ring-2 focus:ring-rose-400"
+            >
+              {teachersList.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+              <option value="__custom__">+ Others (Write name manually)...</option>
+            </select>
+
+            {selectedTeacher === '__custom__' && (
+              <div className="mt-2 space-y-1 animate-in fade-in slide-in-from-top-1 duration-150">
+                <input
+                  type="text"
+                  required
+                  placeholder="Type teacher name manually (e.g. Cikgu Sarah / Mr. David)..."
+                  value={customTeacher}
+                  onChange={e => setCustomTeacher(e.target.value)}
+                  className="w-full text-xs p-2.5 rounded-xl border border-amber-300 bg-white font-medium focus:ring-2 focus:ring-rose-400 focus:border-rose-400 placeholder:text-stone-400"
+                  autoFocus
+                />
+                <p className="text-[10px] text-stone-500">
+                  ✏️ Write the teacher or facilitator's name manually for this booking.
+                </p>
               </div>
             )}
           </div>
